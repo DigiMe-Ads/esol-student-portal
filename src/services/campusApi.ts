@@ -26,7 +26,28 @@ import type {
   EvaluationForm,
   EvaluationResponse,
   SystemNotification,
+  Department,
+  QuizQuestion,
+  QuizAttempt,
+  Room,
+  RoomBooking,
+  AlumniProfile,
+  AuditLog,
 } from '@/types/campus';
+
+// short unique suffix for document numbers (INV-2026-3F9A1C)
+const uid = () => crypto.randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase();
+
+async function one<T>(q: PromiseLike<{ data: any; error: any }>): Promise<T> {
+  const { data, error } = await q;
+  if (error) throw error;
+  return data as T;
+}
+async function many<T>(q: PromiseLike<{ data: any; error: any }>): Promise<T[]> {
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []) as T[];
+}
 
 export const campusApi = {
   // Campuses
@@ -75,7 +96,7 @@ export const campusApi = {
   },
 
   async createInquiry(payload: Partial<Inquiry>): Promise<Inquiry> {
-    const ref_number = `INQ-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const ref_number = `INQ-${new Date().getFullYear()}-${uid()}`;
     const { data, error } = await supabase
       .from('inquiries')
       .insert({
@@ -110,104 +131,12 @@ export const campusApi = {
     return data;
   },
 
-  // Inquiry Conversion to Student
-  async convertInquiryToStudent(params: {
-    inquiryId: string;
-    studentName: string;
-    email: string;
-    phone: string;
-    programmeId: string;
-    intakeId: string;
-    batchId: string;
-    campusId: string;
-    registrationFee: number;
-    paymentMethod: string;
-    paymentReference: string;
-  }): Promise<{ student: Student; invoice: Invoice; payment: Payment }> {
-    // 1. Generate unique sequential student number: EPC-2026-XXXXX
-    const { count } = await supabase.from('students').select('*', { count: 'exact', head: true });
-    const nextSeq = String((count || 0) + 1).padStart(5, '0');
-    const studentNumber = `EPC-${new Date().getFullYear()}-${nextSeq}`;
-
-    // 2. Create Student
-    const { data: student, error: studentError } = await supabase
-      .from('students')
-      .insert({
-        student_number: studentNumber,
-        full_name: params.studentName,
-        email: params.email,
-        phone: params.phone,
-        campus_id: params.campusId,
-        status: 'Active',
-        barcode_val: studentNumber,
-        qr_code_val: studentNumber,
-        photo_url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-      })
-      .select('*, campus:campuses(*)')
-      .single();
-    if (studentError) throw studentError;
-
-    // 3. Create Enrollment
-    await supabase.from('student_enrollments').insert({
-      student_id: student.id,
-      programme_id: params.programmeId,
-      intake_id: params.intakeId,
-      batch_id: params.batchId,
-      status: 'Active',
-    });
-
-    // 4. Create Registration Invoice
-    const invNumber = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const { data: invoice, error: invError } = await supabase
-      .from('invoices')
-      .insert({
-        invoice_number: invNumber,
-        student_id: student.id,
-        inquiry_id: params.inquiryId,
-        programme_id: params.programmeId,
-        title: 'Initial Registration & Enrollment Fee',
-        total_amount: params.registrationFee,
-        paid_amount: params.registrationFee,
-        balance_due: 0,
-        due_date: new Date().toISOString().split('T')[0],
-        status: 'Paid',
-      })
-      .select()
-      .single();
-    if (invError) throw invError;
-
-    // 5. Create Payment Record (Verified)
-    const recNumber = `REC-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const { data: payment, error: payError } = await supabase
-      .from('payments')
-      .insert({
-        receipt_number: recNumber,
-        invoice_id: invoice.id,
-        student_id: student.id,
-        amount: params.registrationFee,
-        payment_method: params.paymentMethod,
-        payment_reference: params.paymentReference || 'REG-AUTO-CONFIRM',
-        status: 'Verified',
-        notes: 'Initial registration payment confirmed upon inquiry conversion.',
-        verified_by: 'Admissions & Finance System',
-      })
-      .select()
-      .single();
-    if (payError) throw payError;
-
-    // 6. Update Inquiry status to Registered
-    await supabase.from('inquiries').update({ status: 'Registered', updated_at: new Date().toISOString() }).eq('id', params.inquiryId);
-
-    // 7. Audit log
-    await supabase.from('audit_logs').insert({
-      user_role: 'Admissions Officer',
-      action: 'INQUIRY_CONVERTED_TO_STUDENT',
-      entity_type: 'Student',
-      entity_id: student.id,
-      details: `Inquiry ${params.inquiryId} converted to Student ${studentNumber}. Registration fee LKR ${params.registrationFee} verified.`,
-    });
-
-    return { student, invoice, payment };
+  // Registers a student (+ enrolment, registration invoice and payment) in one server transaction.
+  // Used by "Add Student" and by CRM inquiry conversion (pass inquiry_id).
+  async enrollStudent(payload: Record<string, unknown>): Promise<{ student: Student; invoice: Invoice | null }> {
+    const { data, error } = await supabase.rpc('enroll_student', { p: payload });
+    if (error) throw error;
+    return data as { student: Student; invoice: Invoice | null };
   },
 
   // Students (SIS)
@@ -300,9 +229,14 @@ export const campusApi = {
     studentNumberOrCode: string;
     sessionId?: string;
     scanMethod?: string;
+    recordedBy?: string;
   }): Promise<{ student: Student; record: AttendanceRecord; session: ClassSession }> {
-    // 1. Find student by barcode, QR code or student number
-    const trimmed = params.studentNumberOrCode.trim();
+    // 1. Find student by barcode, QR code or student number (codes are letters, digits and dashes only)
+    const trimmed = params.studentNumberOrCode.trim().toUpperCase();
+    if (!/^[A-Z0-9-]{3,40}$/.test(trimmed)) throw new Error(`"${params.studentNumberOrCode}" is not a valid student ID / barcode.`);
+    const local = new Date(Date.now() - new Date().getTimezoneOffset() * 60000);
+    const today = local.toISOString().slice(0, 10);
+    const nowHM = local.toISOString().slice(11, 16);
     const { data: student, error: studentError } = await supabase
       .from('students')
       .select('*, enrollments:student_enrollments(*, batch:batches(*))')
@@ -312,6 +246,10 @@ export const campusApi = {
     if (studentError || !student) {
       throw new Error(`Student record not found for code: "${trimmed}"`);
     }
+    if (!['Active', 'Registered'].includes(student.status)) {
+      throw new Error(`${student.full_name} is ${student.status}; check-in refused.`);
+    }
+    const enrolledBatchIds: string[] = (student.enrollments || []).map((e: any) => e.batch_id).filter(Boolean);
 
     // 2. Determine class session
     let session: ClassSession | null = null;
@@ -322,25 +260,30 @@ export const campusApi = {
         .eq('id', params.sessionId)
         .maybeSingle();
       session = s;
+      if (session && !enrolledBatchIds.includes(session.batch_id)) {
+        throw new Error(`${student.full_name} is not enrolled in ${session.batch?.name ?? 'this batch'}.`);
+      }
+      if (session && session.date !== today) throw new Error(`That session is on ${session.date}; only today's classes can be checked in.`);
+      if (session?.status === 'Cancelled') throw new Error('That session was cancelled.');
     } else {
-      // Find today's active session for student's enrolled batch
-      const today = new Date().toISOString().split('T')[0];
-      const enrolledBatchIds = (student.enrollments || []).map((e: any) => e.batch_id).filter(Boolean);
-
+      // Today's class for the student's batch that is running now (or starts within 30 minutes)
       const { data: sessions } = await supabase
         .from('class_sessions')
         .select('*, batch:batches(*), module:modules(*), lecturer:lecturers(*)')
         .eq('date', today)
-        .in('batch_id', enrolledBatchIds.length > 0 ? enrolledBatchIds : ['none'])
-        .limit(1);
-
-      if (sessions && sessions.length > 0) {
-        session = sessions[0];
-      }
+        .neq('status', 'Cancelled')
+        .in('batch_id', enrolledBatchIds.length > 0 ? enrolledBatchIds : ['00000000-0000-0000-0000-000000000000'])
+        .order('start_time');
+      const soon = (t: string) => {
+        const [h, m] = t.split(':').map(Number);
+        const d = h * 60 + m - 30;
+        return `${String(Math.floor(d / 60)).padStart(2, '0')}:${String(d % 60).padStart(2, '0')}`;
+      };
+      session = (sessions || []).find((x: ClassSession) => soon(x.start_time) <= nowHM && x.end_time.slice(0, 5) > nowHM) ?? null;
     }
 
     if (!session) {
-      throw new Error(`No scheduled class session found for student ${student.full_name} (${student.student_number}) today.`);
+      throw new Error(`No class running now for ${student.full_name} (${student.student_number}). Pick the session first.`);
     }
 
     // 3. Verify Duplicate Scan Check
@@ -381,6 +324,7 @@ export const campusApi = {
         student_id: student.id,
         status,
         scan_method: params.scanMethod || 'Barcode',
+        recorded_by: params.recordedBy || 'Reception / Automated Scan',
         remarks,
         scan_time: new Date().toISOString(),
       })
@@ -426,37 +370,49 @@ export const campusApi = {
     return data || [];
   },
 
-  async verifyPayment(paymentId: string, verifiedBy: string): Promise<Payment> {
-    const { data: payment, error } = await supabase
-      .from('payments')
-      .update({
-        status: 'Verified',
-        verified_by: verifiedBy,
-        verified_at: new Date().toISOString(),
-      })
-      .eq('id', paymentId)
-      .select('*, invoice:invoices(*)')
-      .single();
-
+  async verifyPayment(paymentId: string): Promise<void> {
+    const { error } = await supabase.rpc('verify_payment', { p_payment: paymentId });
     if (error) throw error;
+  },
 
-    // Update invoice paid amount
-    if (payment.invoice_id) {
-      const { data: inv } = await supabase.from('invoices').select('paid_amount, total_amount').eq('id', payment.invoice_id).single();
-      if (inv) {
-        const newPaid = Number(inv.paid_amount) + Number(payment.amount);
-        const newBalance = Math.max(0, Number(inv.total_amount) - newPaid);
-        const newStatus = newBalance <= 0 ? 'Paid' : 'Partial';
+  async rejectPayment(paymentId: string, reason: string): Promise<void> {
+    const { error } = await supabase.rpc('reject_payment', { p_payment: paymentId, p_reason: reason });
+    if (error) throw error;
+  },
 
-        await supabase.from('invoices').update({ paid_amount: newPaid, balance_due: newBalance, status: newStatus }).eq('id', payment.invoice_id);
-      }
-    }
+  async recordPayment(p: { invoiceId: string; amount: number; method: string; reference?: string; notes?: string }): Promise<Payment> {
+    const { data, error } = await supabase.rpc('record_payment', {
+      p_invoice: p.invoiceId, p_amount: p.amount, p_method: p.method, p_reference: p.reference ?? '', p_notes: p.notes ?? '',
+    });
+    if (error) throw error;
+    return data as Payment;
+  },
 
-    return payment;
+  // Student / parent uploads a bank slip; finance verifies it later.
+  async submitPaymentSlip(p: { invoiceId: string; studentId: string; amount: number; method: string; reference?: string; proofUrl?: string }): Promise<Payment> {
+    const { data, error } = await supabase
+      .from('payments')
+      .insert({
+        receipt_number: `SLIP-${new Date().getFullYear()}-${uid()}`,
+        invoice_id: p.invoiceId,
+        student_id: p.studentId,
+        amount: p.amount,
+        payment_method: p.method,
+        payment_reference: p.reference || null,
+        proof_url: p.proofUrl || null,
+        status: 'Pending',
+        verified_by: null,
+        verified_at: null,
+        notes: 'Submitted online for verification',
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
   },
 
   async createInvoice(payload: Partial<Invoice>): Promise<Invoice> {
-    const invNumber = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const invNumber = `INV-${new Date().getFullYear()}-${uid()}`;
     const { data, error } = await supabase
       .from('invoices')
       .insert({
@@ -488,6 +444,12 @@ export const campusApi = {
       .select('*, module:modules(*), materials:lms_materials(*), assignments:lms_assignments(*)')
       .eq('id', id)
       .maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+
+  async createLMSMaterial(payload: Partial<LMSMaterial>): Promise<LMSMaterial> {
+    const { data, error } = await supabase.from('lms_materials').insert(payload).select().single();
     if (error) throw error;
     return data;
   },
@@ -536,8 +498,9 @@ export const campusApi = {
     return data || [];
   },
 
-  async submitQuizAttempt(payload: { quiz_id: string; student_id: string; score: number; total_questions: number; passed: boolean }) {
-    const { data, error } = await supabase.from('lms_quiz_attempts').insert(payload).select().single();
+  // Graded on the server; students' attempts are recorded, staff get a preview score.
+  async submitQuiz(quizId: string, answers: Record<number, number>): Promise<{ score: number; correct: number; total: number; passed: boolean; recorded: boolean }> {
+    const { data, error } = await supabase.rpc('submit_quiz', { p_quiz: quizId, p_answers: answers });
     if (error) throw error;
     return data;
   },
@@ -581,10 +544,15 @@ export const campusApi = {
     return data || [];
   },
 
-  async submitEvaluationResponse(payload: Partial<EvaluationResponse>): Promise<EvaluationResponse> {
-    const { data, error } = await supabase.from('evaluation_responses').insert(payload).select().single();
+  async submitEvaluation(lecturerId: string, moduleId: string, rating: number, comments: string): Promise<void> {
+    const { error } = await supabase.rpc('submit_evaluation', { p_lecturer: lecturerId, p_module: moduleId, p_rating: rating, p_comments: comments });
     if (error) throw error;
-    return data;
+  },
+
+  async getMyEvaluations(): Promise<{ lecturer_id: string; module_id: string }[]> {
+    const { data, error } = await supabase.rpc('my_evaluations');
+    if (error) throw error;
+    return data || [];
   },
 
   async getEvaluationResponses(lecturerId?: string): Promise<EvaluationResponse[]> {
@@ -606,8 +574,8 @@ export const campusApi = {
   },
 
   async generateCertificate(studentId: string, programmeId: string, qualification: string): Promise<Certificate> {
-    const certNum = `EPC-CERT-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const vrfCode = `VRF-${Math.floor(1000 + Math.random() * 9000)}-EPC`;
+    const certNum = `EPC-CERT-${new Date().getFullYear()}-${uid()}`;
+    const vrfCode = `VRF-${uid()}${uid()}`;
 
     const { data, error } = await supabase
       .from('certificates')
@@ -633,7 +601,7 @@ export const campusApi = {
   },
 
   async createSupportTicket(payload: Partial<SupportTicket>): Promise<SupportTicket> {
-    const ticketNumber = `TCK-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const ticketNumber = `TCK-${new Date().getFullYear()}-${uid()}`;
     const { data, error } = await supabase.from('support_tickets').insert({ ...payload, ticket_number: ticketNumber }).select().single();
     if (error) throw error;
     return data;
@@ -652,5 +620,172 @@ export const campusApi = {
     const { data, error } = await supabase.from('system_notifications').select('*').order('created_at', { ascending: false });
     if (error) throw error;
     return data || [];
+  },
+
+  // ---------------------------------------------------------------- academic structure
+  async createCampus(p: Partial<Campus>): Promise<Campus> {
+    return one(supabase.from('campuses').insert(p).select().single());
+  },
+  async createProgramme(p: Partial<Programme>): Promise<Programme> {
+    return one(supabase.from('programmes').insert(p).select().single());
+  },
+  async updateProgramme(id: string, p: Partial<Programme>): Promise<Programme> {
+    return one(supabase.from('programmes').update(p).eq('id', id).select().single());
+  },
+  async createModule(p: Partial<Module>): Promise<Module> {
+    return one(supabase.from('modules').insert(p).select('*, programme:programmes(*)').single());
+  },
+  async createIntake(p: Partial<Intake>): Promise<Intake> {
+    return one(supabase.from('intakes').insert(p).select('*, programme:programmes(*)').single());
+  },
+  async createBatch(p: Partial<Batch>): Promise<Batch> {
+    return one(supabase.from('batches').insert(p).select('*, intake:intakes(*, programme:programmes(*))').single());
+  },
+  async getDepartments(): Promise<Department[]> {
+    return many(supabase.from('departments').select('*').order('name'));
+  },
+
+  // ---------------------------------------------------------------- lecturers
+  async createLecturer(p: Partial<Lecturer>): Promise<Lecturer> {
+    return one(supabase.from('lecturers').insert(p).select('*, campus:campuses(*)').single());
+  },
+  async updateLecturer(id: string, p: Partial<Lecturer>): Promise<Lecturer> {
+    return one(supabase.from('lecturers').update(p).eq('id', id).select('*, campus:campuses(*)').single());
+  },
+  async getLecturerAllocations(): Promise<any[]> {
+    return many(supabase.from('lecturer_allocations').select('*, module:modules(*), batch:batches(*)'));
+  },
+  async allocateLecturer(p: { lecturer_id: string; module_id: string; batch_id: string }) {
+    return one(supabase.from('lecturer_allocations').insert(p).select('*, module:modules(*), batch:batches(*)').single());
+  },
+  async removeAllocation(id: string) {
+    const { error } = await supabase.from('lecturer_allocations').delete().eq('id', id);
+    if (error) throw error;
+  },
+
+  // ---------------------------------------------------------------- timetable
+  async updateClassSessionStatus(id: string, status: string): Promise<void> {
+    const { error } = await supabase.from('class_sessions').update({ status }).eq('id', id);
+    if (error) throw error;
+  },
+
+  // ---------------------------------------------------------------- students
+  async updateStudentStatus(id: string, status: string): Promise<void> {
+    const { error } = await supabase.from('students').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
+    if (error) throw error;
+  },
+  async getStudentLogins(studentId: string): Promise<any[]> {
+    const { data, error } = await supabase.rpc('student_logins', { p_student: studentId });
+    if (error) throw error;
+    return data || [];
+  },
+  async createPortalUser(p: { username: string; displayName: string; role: string; password: string; studentId?: string; lecturerId?: string }) {
+    const { data, error } = await supabase.rpc('create_user', {
+      p_username: p.username, p_display_name: p.displayName, p_role: p.role, p_password: p.password,
+      p_student: p.studentId ?? null, p_lecturer: p.lecturerId ?? null,
+    });
+    if (error) throw error;
+    return data;
+  },
+
+  // ---------------------------------------------------------------- LMS authoring & student work
+  async createLMSCourse(p: Partial<LMSCourse>): Promise<LMSCourse> {
+    return one(supabase.from('lms_courses').insert(p).select('*, module:modules(*), materials:lms_materials(*), assignments:lms_assignments(*)').single());
+  },
+  async createAssignment(p: Partial<LMSAssignment>): Promise<LMSAssignment> {
+    return one(supabase.from('lms_assignments').insert(p).select().single());
+  },
+  async createQuiz(p: { course_id: string; title: string; time_limit_mins: number; passing_score: number; questions: QuizQuestion[] }): Promise<LMSQuiz> {
+    const answers = Object.fromEntries(p.questions.map((q) => [String(q.id), q.correctAnswer ?? 0]));
+    const questions = p.questions.map(({ correctAnswer: _c, ...q }) => q);
+    const quiz = await one<LMSQuiz>(supabase.from('lms_quizzes').insert({ ...p, questions }).select().single());
+    const { error } = await supabase.from('lms_quiz_keys').insert({ quiz_id: quiz.id, answers });
+    if (error) {
+      await supabase.from('lms_quizzes').delete().eq('id', quiz.id);
+      throw error;
+    }
+    return quiz;
+  },
+  async getQuizAttempts(quizId?: string, studentId?: string): Promise<QuizAttempt[]> {
+    let q = supabase.from('lms_quiz_attempts').select('*').order('submitted_at', { ascending: false });
+    if (quizId) q = q.eq('quiz_id', quizId);
+    if (studentId) q = q.eq('student_id', studentId);
+    return many(q);
+  },
+  async getStudentSubmissions(studentId: string): Promise<LMSSubmission[]> {
+    return many(supabase.from('lms_submissions').select('*').eq('student_id', studentId));
+  },
+
+  // ---------------------------------------------------------------- examinations
+  async createExamination(p: Partial<Examination>): Promise<Examination> {
+    return one(supabase.from('examinations').insert(p).select('*, module:modules(*)').single());
+  },
+  async registerExamCandidates(examId: string): Promise<{ checked: number; registered: number }> {
+    const { data, error } = await supabase.rpc('register_exam_candidates', { p_exam: examId });
+    if (error) throw error;
+    return data;
+  },
+  async getStudentResults(studentId: string): Promise<ExamRegistration[]> {
+    return many(supabase.from('exam_registrations').select('*, exam:examinations(*, module:modules(*))').eq('student_id', studentId));
+  },
+
+  // ---------------------------------------------------------------- certificates
+  async verifyCertificate(code: string): Promise<any | null> {
+    const { data, error } = await supabase.rpc('verify_certificate', { p_code: code });
+    if (error) throw error;
+    return data;
+  },
+
+  async updateTicketAssignee(id: string, assignedTo: string): Promise<void> {
+    const { error } = await supabase.from('support_tickets').update({ assigned_to: assignedTo || null }).eq('id', id);
+    if (error) throw error;
+  },
+
+  // ---------------------------------------------------------------- notifications
+  async createNotification(p: Partial<SystemNotification>): Promise<SystemNotification> {
+    return one(supabase.from('system_notifications').insert({ channel: 'In-app', ...p }).select('*, batch:batches(*), student:students(*)').single());
+  },
+  async getNotificationFeed(): Promise<SystemNotification[]> {
+    return many(supabase.from('system_notifications').select('*, batch:batches(*), student:students(*)').order('created_at', { ascending: false }).limit(100));
+  },
+
+  // ---------------------------------------------------------------- facilities
+  async getRooms(): Promise<Room[]> {
+    return many(supabase.from('rooms').select('*, campus:campuses(*)').order('name'));
+  },
+  async createRoom(p: Partial<Room>): Promise<Room> {
+    return one(supabase.from('rooms').insert(p).select('*, campus:campuses(*)').single());
+  },
+  async getRoomBookings(fromDate?: string): Promise<RoomBooking[]> {
+    let q = supabase.from('room_bookings').select('*, room:rooms(*)').order('date').order('start_time');
+    if (fromDate) q = q.gte('date', fromDate);
+    return many(q);
+  },
+  // Refuses overlaps with other bookings and with classes timetabled in the same room.
+  async bookRoom(p: { room: Room; date: string; start_time: string; end_time: string; purpose: string; booked_by: string }): Promise<RoomBooking> {
+    if (p.end_time <= p.start_time) throw new Error('End time must be after start time.');
+    const { data: clash } = await supabase.from('room_bookings').select('id, purpose').eq('room_id', p.room.id).eq('date', p.date)
+      .lt('start_time', p.end_time).gt('end_time', p.start_time);
+    if (clash && clash.length) throw new Error(`${p.room.name} is already booked then (${clash[0].purpose}).`);
+    const { data: cls } = await supabase.from('class_sessions').select('id').eq('room_number', p.room.name).eq('date', p.date)
+      .neq('status', 'Cancelled').lt('start_time', p.end_time).gt('end_time', p.start_time);
+    if (cls && cls.length) throw new Error(`${p.room.name} has a timetabled class at that time.`);
+    return one(supabase.from('room_bookings').insert({ room_id: p.room.id, date: p.date, start_time: p.start_time, end_time: p.end_time,
+      purpose: p.purpose, booked_by: p.booked_by }).select('*, room:rooms(*)').single());
+  },
+  async cancelRoomBooking(id: string) {
+    const { error } = await supabase.from('room_bookings').delete().eq('id', id);
+    if (error) throw error;
+  },
+
+  // ---------------------------------------------------------------- alumni & audit
+  async getAlumniProfiles(): Promise<AlumniProfile[]> {
+    return many(supabase.from('alumni_profiles').select('*'));
+  },
+  async saveAlumniProfile(p: Partial<AlumniProfile> & { student_id: string }): Promise<AlumniProfile> {
+    return one(supabase.from('alumni_profiles').upsert({ ...p, updated_at: new Date().toISOString() }).select().single());
+  },
+  async getAuditLogs(limit = 200): Promise<AuditLog[]> {
+    return many(supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(limit));
   },
 };

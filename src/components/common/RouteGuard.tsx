@@ -6,14 +6,14 @@ interface RouteGuardProps {
   children: React.ReactNode;
 }
 
-// Everything except the login screen needs a signed-in portal account.
-const PUBLIC_ROUTES = ['/login'];
+// Everything except the login screen and public certificate checks needs a signed-in portal account.
+const isPublicPath = (path: string) => path === '/login' || path.startsWith('/verify/');
 
 export function RouteGuard({ children }: RouteGuardProps) {
   const { user, loading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const isPublic = PUBLIC_ROUTES.includes(location.pathname);
+  const isPublic = isPublicPath(location.pathname);
 
   useEffect(() => {
     if (loading) return;

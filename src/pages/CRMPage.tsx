@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { campusApi } from '@/services/campusApi';
-import type { Inquiry, InquiryStatus, Programme, Campus, Intake, Batch } from '@/types/campus';
+import type { Inquiry, InquiryFollowup, InquiryStatus, Programme, Campus, Intake, Batch } from '@/types/campus';
+import { EnrollStudentDialog } from '@/components/students/EnrollStudentDialog';
+import { useAuth } from '@/contexts/AuthContext';
+import { usePermission } from '@/lib/permissions';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -73,6 +76,11 @@ export const CRMPage: React.FC = () => {
   const [followupOpen, setFollowupOpen] = useState(false);
   const [convertModalOpen, setConvertModalOpen] = useState(false);
   const [activeInquiry, setActiveInquiry] = useState<Inquiry | null>(null);
+  const [followHistory, setFollowHistory] = useState<InquiryFollowup[]>([]);
+  const { user } = useAuth();
+  const can = usePermission();
+  const canEdit = can('manageCRM');
+  const canConvert = can('manageStudents');
 
   // New Inquiry Form State
   const [inqName, setInqName] = useState('');
@@ -91,14 +99,6 @@ export const CRMPage: React.FC = () => {
   const [followOutcome, setFollowOutcome] = useState('Interested');
   const [followNotes, setFollowNotes] = useState('');
   const [nextDate, setNextDate] = useState('');
-
-  // Conversion Form State
-  const [convProgrammeId, setConvProgrammeId] = useState('');
-  const [convIntakeId, setConvIntakeId] = useState('');
-  const [convBatchId, setConvBatchId] = useState('');
-  const [convFee, setConvFee] = useState(15000);
-  const [convPayMethod, setConvPayMethod] = useState('Bank Transfer');
-  const [convPayRef, setConvPayRef] = useState('TXN-REG-8821');
 
   const loadData = () => {
     setLoading(true);
@@ -166,7 +166,7 @@ export const CRMPage: React.FC = () => {
         source: inqSource,
         notes: inqNotes,
         status: 'New Inquiry',
-        follow_up_date: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
+        follow_up_date: new Date(Date.now() + 86400000 * 2 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
       });
 
       setInquiries([created, ...inquiries]);
@@ -187,8 +187,10 @@ export const CRMPage: React.FC = () => {
 
   const handleOpenFollowup = (inquiry: Inquiry) => {
     setActiveInquiry(inquiry);
+    setFollowHistory([]);
+    campusApi.getInquiryFollowups(inquiry.id).then(setFollowHistory).catch(() => setFollowHistory([]));
     setFollowNotes('');
-    setNextDate(new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0]);
+    setNextDate(new Date(Date.now() + 86400000 * 3 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10));
     setFollowupOpen(true);
   };
 
@@ -205,7 +207,7 @@ export const CRMPage: React.FC = () => {
         outcome: followOutcome,
         notes: followNotes,
         follow_up_date: nextDate,
-        logged_by: 'Admissions Officer',
+        logged_by: user?.display_name || 'Admissions Officer',
       });
 
       toast.success('Follow-up interaction logged to timeline.');
@@ -218,40 +220,7 @@ export const CRMPage: React.FC = () => {
 
   const handleOpenConvert = (inquiry: Inquiry) => {
     setActiveInquiry(inquiry);
-    setConvProgrammeId(inquiry.interested_programme_id || programmes[0]?.id || '');
-    setConvIntakeId(intakes[0]?.id || '');
-    setConvBatchId(batches[0]?.id || '');
-    const prog = programmes.find((p) => p.id === (inquiry.interested_programme_id || programmes[0]?.id));
-    setConvFee(prog?.registration_fee || 15000);
     setConvertModalOpen(true);
-  };
-
-  const handleExecuteConversion = async () => {
-    if (!activeInquiry) return;
-
-    try {
-      const result = await campusApi.convertInquiryToStudent({
-        inquiryId: activeInquiry.id,
-        studentName: activeInquiry.student_name,
-        email: activeInquiry.email || `${activeInquiry.student_name.toLowerCase().replace(/\s+/g, '.')}@student.esolpremier.edu.lk`,
-        phone: activeInquiry.contact_number,
-        programmeId: convProgrammeId,
-        intakeId: convIntakeId,
-        batchId: convBatchId,
-        campusId: activeInquiry.preferred_campus_id || campuses[0]?.id,
-        registrationFee: convFee,
-        paymentMethod: convPayMethod,
-        paymentReference: convPayRef,
-      });
-
-      toast.success(
-        `Success! Permanent Student Number ${result.student.student_number} assigned to ${result.student.full_name}. Digital ID card generated!`
-      );
-      setConvertModalOpen(false);
-      loadData();
-    } catch (err: any) {
-      toast.error(`Conversion failed: ${err.message}`);
-    }
   };
 
   return (
@@ -273,14 +242,14 @@ export const CRMPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2.5">
-          <Button
+          {canEdit && <Button
             size="sm"
             onClick={() => setNewInquiryOpen(true)}
             className="text-xs h-9 gap-1.5 bg-primary text-primary-foreground shadow-sm"
           >
             <UserPlus className="w-4 h-4" />
             New Inquiry
-          </Button>
+          </Button>}
           <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as any)} className="w-auto">
             <TabsList className="h-9">
               <TabsTrigger value="kanban" className="text-xs">
@@ -412,7 +381,7 @@ export const CRMPage: React.FC = () => {
                           </Button>
 
                           {inq.status !== 'Registered' ? (
-                            <Button
+                            canConvert && <Button
                               size="sm"
                               onClick={() => handleOpenConvert(inq)}
                               className="h-6 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
@@ -430,6 +399,7 @@ export const CRMPage: React.FC = () => {
                         <div className="pt-1">
                           <Select
                             value={inq.status}
+                            disabled={!canEdit}
                             onValueChange={(val) => handleStageChange(inq.id, val as InquiryStatus)}
                           >
                             <SelectTrigger className="h-6 text-[10px] bg-muted/30">
@@ -503,7 +473,7 @@ export const CRMPage: React.FC = () => {
                         >
                           Log Call
                         </Button>
-                        {inq.status !== 'Registered' && (
+                        {inq.status !== 'Registered' && canConvert && (
                           <Button
                             size="sm"
                             onClick={() => handleOpenConvert(inq)}
@@ -598,6 +568,22 @@ export const CRMPage: React.FC = () => {
               </div>
 
               <div className="space-y-1">
+                <Label className="text-xs">Preferred Campus</Label>
+                <Select value={inqCampusId} onValueChange={setInqCampusId}>
+                  <SelectTrigger className="h-8 text-xs">
+                    <SelectValue placeholder="Select campus" />
+                  </SelectTrigger>
+                  <SelectContent className="text-xs">
+                    {campuses.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1">
                 <Label className="text-xs">Interested Programme</Label>
                 <Select value={inqProgrammeId} onValueChange={setInqProgrammeId}>
                   <SelectTrigger className="h-8 text-xs">
@@ -658,13 +644,29 @@ export const CRMPage: React.FC = () => {
       <Dialog open={followupOpen} onOpenChange={setFollowupOpen}>
         <DialogContent className="max-w-md text-xs">
           <DialogHeader>
-            <DialogTitle className="text-base font-serif font-bold">Log Interaction & Follow-Up</DialogTitle>
+            <DialogTitle className="text-base font-serif font-bold">{canEdit ? 'Log Interaction & Follow-Up' : 'Interaction History'}</DialogTitle>
             <DialogDescription className="text-xs">
               Recording notes for lead: <span className="font-semibold text-foreground">{activeInquiry?.student_name}</span>
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3 pt-2">
+            <div className="max-h-40 overflow-y-auto rounded-lg border border-border divide-y divide-border">
+              {followHistory.length === 0 ? (
+                <div className="p-2.5 text-[11px] text-muted-foreground italic">No interactions logged yet.</div>
+              ) : (
+                followHistory.map((fu) => (
+                  <div key={fu.id} className="p-2.5 space-y-0.5">
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>{fu.contact_type} • {fu.outcome} • {fu.logged_by}</span>
+                      <span>{new Date(fu.created_at).toLocaleString()}</span>
+                    </div>
+                    <div className="text-[11px] text-foreground">{fu.notes}</div>
+                  </div>
+                ))
+              )}
+            </div>
+            {canEdit && (<>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Label className="text-xs">Channel</Label>
@@ -717,125 +719,32 @@ export const CRMPage: React.FC = () => {
                 className="text-xs h-8"
               />
             </div>
+            </>)}
           </div>
 
           <DialogFooter className="pt-2">
             <Button variant="outline" size="sm" onClick={() => setFollowupOpen(false)}>
               Cancel
             </Button>
+            {canEdit && (
             <Button size="sm" onClick={handleSaveFollowup} className="bg-primary text-primary-foreground">
               Save Activity
             </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* MODAL 3: CONVERT INQUIRY TO STUDENT (CRITICAL WORKFLOW) */}
-      <Dialog open={convertModalOpen} onOpenChange={setConvertModalOpen}>
-        <DialogContent className="max-w-lg text-xs">
-          <DialogHeader>
-            <DialogTitle className="text-base font-serif font-bold text-emerald-600 flex items-center gap-2">
-              <GraduationCap className="w-5 h-5" />
-              Inquiry-to-Student Conversion
-            </DialogTitle>
-            <DialogDescription className="text-xs">
-              Automated institutional enrollment: Assigns permanent Student Number (EPC-2026-XXXXX), activates student portal, generates digital barcode ID, and verifies initial registration invoice in LKR.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-3.5 pt-2">
-            <div className="p-3 bg-muted/40 rounded-lg border border-border">
-              <div className="font-semibold text-foreground text-sm">{activeInquiry?.student_name}</div>
-              <div className="text-[11px] text-muted-foreground mt-0.5">
-                Contact: {activeInquiry?.contact_number} • Ref: {activeInquiry?.ref_number}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label className="text-xs">Enroll Programme</Label>
-                <Select value={convProgrammeId} onValueChange={setConvProgrammeId}>
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs">
-                    {programmes.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs">Assigned Batch</Label>
-                <Select value={convBatchId} onValueChange={setConvBatchId}>
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs">
-                    {batches.map((b) => (
-                      <SelectItem key={b.id} value={b.id}>
-                        {b.name} ({b.code})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs">Verified Registration Fee (LKR)</Label>
-                <Input
-                  type="number"
-                  value={convFee}
-                  onChange={(e) => setConvFee(Number(e.target.value))}
-                  className="text-xs h-8"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <Label className="text-xs">Payment Method</Label>
-                <Select value={convPayMethod} onValueChange={setConvPayMethod}>
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="text-xs">
-                    <SelectItem value="Bank Transfer">Bank Transfer (Deposit Slip)</SelectItem>
-                    <SelectItem value="Cash">Cash at Counter</SelectItem>
-                    <SelectItem value="Card">Credit/Debit POS</SelectItem>
-                    <SelectItem value="Online Gateway">Online Banking Gateway</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs">Payment Verification Slip / Transaction Reference</Label>
-              <Input
-                value={convPayRef}
-                onChange={(e) => setConvPayRef(e.target.value)}
-                placeholder="e.g. BOC-DEP-88992 or POS receipt no"
-                className="text-xs h-8"
-              />
-            </div>
-          </div>
-
-          <DialogFooter className="pt-2">
-            <Button variant="outline" size="sm" onClick={() => setConvertModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={handleExecuteConversion}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
-            >
-              <CheckCircle className="w-4 h-4" />
-              Verify & Complete Registration
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* MODAL 3: CONVERT INQUIRY TO STUDENT */}
+      <EnrollStudentDialog
+        open={convertModalOpen}
+        onOpenChange={setConvertModalOpen}
+        campuses={campuses}
+        programmes={programmes}
+        batches={batches}
+        inquiry={activeInquiry}
+        onEnrolled={() => loadData()}
+      />
     </div>
   );
 };

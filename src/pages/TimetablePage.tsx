@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { campusApi } from '@/services/campusApi';
-import type { ClassSession, Batch, Module, Lecturer, Campus } from '@/types/campus';
+import type { ClassSession, Batch, Module, Lecturer, Campus, Room } from '@/types/campus';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -32,6 +32,9 @@ import {
   Calendar,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useAuthRole } from '@/contexts/AuthRoleContext';
+import { usePermission } from '@/lib/permissions';
+import { todayISO } from '@/lib/print';
 
 export const TimetablePage: React.FC = () => {
   const [sessions, setSessions] = useState<ClassSession[]>([]);
@@ -46,10 +49,16 @@ export const TimetablePage: React.FC = () => {
   const [batchId, setBatchId] = useState('');
   const [moduleId, setModuleId] = useState('');
   const [lecturerId, setLecturerId] = useState('');
-  const [roomNumber, setRoomNumber] = useState('Hall 302 (Multimedia)');
-  const [sessionDate, setSessionDate] = useState('2026-10-18');
-  const [startTime, setStartTime] = useState('09:00:00');
-  const [endTime, setEndTime] = useState('13:00:00');
+  const [roomNumber, setRoomNumber] = useState('');
+  const [sessionDate, setSessionDate] = useState(todayISO());
+  const [startTime, setStartTime] = useState('09:00');
+  const [endTime, setEndTime] = useState('12:00');
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [showPast, setShowPast] = useState(false);
+  const { selectedCampusId, currentRole, portalLecturerId } = useAuthRole();
+  const [onlyMine, setOnlyMine] = useState(currentRole === 'lecturer');
+  const can = usePermission();
+  const canManage = can('manageTimetable');
 
   const loadData = () => {
     setLoading(true);
@@ -59,8 +68,11 @@ export const TimetablePage: React.FC = () => {
       campusApi.getModules(),
       campusApi.getLecturers(),
       campusApi.getCampuses(),
+      campusApi.getRooms(),
     ])
-      .then(([s, b, m, l, c]) => {
+      .then(([s, b, m, l, c, r]) => {
+        setRooms(r);
+        if (r.length > 0) setRoomNumber((prev) => prev || r[0].name);
         setSessions(s);
         setBatches(b);
         setModules(m);
@@ -70,7 +82,30 @@ export const TimetablePage: React.FC = () => {
         if (m.length > 0) setModuleId(m[0].id);
         if (l.length > 0) setLecturerId(l[0].id);
       })
+      .catch((err) => toast.error(err.message))
       .finally(() => setLoading(false));
+  };
+
+  const batchProgramme = batches.find((b) => b.id === batchId)?.intake?.programme_id;
+  const batchModules = modules.filter((m) => !batchProgramme || m.programme_id === batchProgramme);
+  useEffect(() => {
+    if (batchModules.length && !batchModules.some((m) => m.id === moduleId)) setModuleId(batchModules[0].id);
+  }, [batchId, modules]);
+
+  const today = todayISO();
+  const shown = sessions
+    .filter((x) => showPast || x.date >= today)
+    .filter((x) => selectedCampusId === 'all' || x.campus_id === selectedCampusId)
+    .filter((x) => !onlyMine || x.lecturer_id === portalLecturerId);
+
+  const handleCancel = async (id: string, status: string) => {
+    try {
+      await campusApi.updateClassSessionStatus(id, status);
+      toast.success(status === 'Cancelled' ? 'Session cancelled.' : 'Session restored.');
+      loadData();
+    } catch (err: any) {
+      toast.error(err.message);
+    }
   };
 
   useEffect(() => {
@@ -79,7 +114,21 @@ export const TimetablePage: React.FC = () => {
 
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (endTime <= startTime) {
+      toast.error('End time must be after the start time.');
+      return;
+    }
+    const clash = sessions.find((x) => x.batch_id === batchId && x.date === sessionDate && x.status !== 'Cancelled'
+      && x.start_time < endTime && x.end_time > startTime);
+    if (clash) {
+      toast.error(`Batch conflict: this batch already has ${clash.module?.code} at ${clash.start_time.slice(0, 5)}.`);
+      return;
+    }
+    const room = rooms.find((r) => r.name === roomNumber);
     try {
+      const booked = (await campusApi.getRoomBookings(sessionDate)).find((b) => b.room_id === room?.id && b.date === sessionDate
+        && b.start_time < endTime && b.end_time > startTime);
+      if (booked) throw new Error(`${roomNumber} is reserved then for "${booked.purpose}".`);
       const created = await campusApi.createClassSession({
         batch_id: batchId,
         module_id: moduleId,
@@ -88,12 +137,12 @@ export const TimetablePage: React.FC = () => {
         date: sessionDate,
         start_time: startTime,
         end_time: endTime,
-        campus_id: campuses[0]?.id,
+        campus_id: room?.campus_id ?? campuses[0]?.id,
         status: 'Scheduled',
       });
 
       toast.success(
-        `Class session scheduled with 0 room/lecturer conflicts! (${created.date} ${created.start_time})`
+        `Session scheduled for ${created.date} ${created.start_time.slice(0, 5)}; no room, lecturer or batch conflicts.`
       );
       setCreateModalOpen(false);
       loadData();
@@ -123,26 +172,31 @@ export const TimetablePage: React.FC = () => {
           </p>
         </div>
 
-        <Button
+        <div className="flex flex-wrap items-center gap-2">
+        <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={showPast} onChange={(e) => setShowPast(e.target.checked)} /> Show past</label>
+        {portalLecturerId && <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={onlyMine} onChange={(e) => setOnlyMine(e.target.checked)} /> Only my classes</label>}
+        {canManage && <Button
           size="sm"
           onClick={() => setCreateModalOpen(true)}
           className="text-xs h-9 gap-1.5 bg-primary text-primary-foreground"
         >
           <Plus className="w-4 h-4" />
           Schedule Session
-        </Button>
+        </Button>}
+        </div>
       </div>
 
       {/* Scheduled Sessions Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {sessions.map((sess) => (
+        {shown.length === 0 && <div className="text-xs text-muted-foreground italic">{loading ? 'Loading…' : 'No sessions to show.'}</div>}
+        {shown.map((sess) => (
           <Card key={sess.id} className="shadow-sm border-border hover:shadow-md transition-shadow">
             <CardHeader className="pb-3 border-b border-border">
               <div className="flex items-center justify-between">
                 <Badge variant="outline" className="text-[10px] border-primary/30 text-primary">
                   {sess.batch?.code || 'BATCH'}
                 </Badge>
-                <Badge className="bg-emerald-500/15 text-emerald-600 text-[10px] font-normal">
+                <Badge className={`${sess.status === 'Cancelled' ? 'bg-destructive/15 text-destructive' : 'bg-emerald-500/15 text-emerald-600'} text-[10px] font-normal`}>
                   {sess.status}
                 </Badge>
               </div>
@@ -161,7 +215,7 @@ export const TimetablePage: React.FC = () => {
               <div className="flex items-center gap-2 text-muted-foreground">
                 <Clock className="w-4 h-4 text-amber-500 shrink-0" />
                 <span>
-                  {sess.start_time} - {sess.end_time}
+                  {sess.start_time.slice(0, 5)} - {sess.end_time.slice(0, 5)}
                 </span>
               </div>
 
@@ -172,8 +226,15 @@ export const TimetablePage: React.FC = () => {
 
               <div className="flex items-center gap-2 text-muted-foreground pt-1 border-t border-border/60">
                 <User className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span className="truncate">Instructor: {sess.lecturer?.full_name}</span>
+                <span className="truncate">Instructor: {sess.lecturer?.full_name ?? 'TBA'}</span>
               </div>
+              {canManage && sess.date >= today && (
+                <div className="pt-1 flex justify-end">
+                  <Button size="sm" variant="outline" className="h-6 text-[10px]" onClick={() => handleCancel(sess.id, sess.status === 'Cancelled' ? 'Scheduled' : 'Cancelled')}>
+                    {sess.status === 'Cancelled' ? 'Restore Session' : 'Cancel Session'}
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         ))}
@@ -213,7 +274,7 @@ export const TimetablePage: React.FC = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="text-xs">
-                  {modules.map((m) => (
+                  {batchModules.map((m) => (
                     <SelectItem key={m.id} value={m.id}>
                       {m.code} - {m.name}
                     </SelectItem>
@@ -252,12 +313,12 @@ export const TimetablePage: React.FC = () => {
 
               <div className="space-y-1">
                 <Label className="text-xs">Classroom / Venue</Label>
-                <Input
-                  required
-                  value={roomNumber}
-                  onChange={(e) => setRoomNumber(e.target.value)}
-                  className="h-8 text-xs"
-                />
+                <Select value={roomNumber} onValueChange={setRoomNumber}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Select room" /></SelectTrigger>
+                  <SelectContent className="text-xs">
+                    {rooms.map((r) => <SelectItem key={r.id} value={r.name}>{r.name} ({r.campus?.code ?? ''}, {r.capacity})</SelectItem>)}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
@@ -287,7 +348,7 @@ export const TimetablePage: React.FC = () => {
 
             <div className="p-2.5 rounded-lg bg-muted/40 border border-border text-[11px] text-muted-foreground flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Real-time conflict verification will run before confirmation.</span>
+              <span>Checks room, lecturer, batch and room-reservation clashes before saving.</span>
             </div>
 
             <DialogFooter className="pt-2">

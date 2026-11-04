@@ -1,12 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { printElement } from '@/lib/print';
 import QRCode from 'qrcode';
 import { BarcodeRenderer } from './BarcodeRenderer';
 import type { Student } from '@/types/campus';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Printer, Download, RefreshCw, ShieldCheck, Award } from 'lucide-react';
-import { toast } from 'sonner';
+import { Printer, RefreshCw, ShieldCheck, Award } from 'lucide-react';
 
 interface StudentIDCardProps {
   student: Student;
@@ -15,6 +15,14 @@ interface StudentIDCardProps {
 
 export const StudentIDCard: React.FC<StudentIDCardProps> = ({ student, onPrint }) => {
   const [isFlipped, setIsFlipped] = useState(false);
+  const [printing, setPrinting] = useState(false); // renders both sides for printing
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!printing) return;
+    printElement(cardRef.current);
+    setPrinting(false);
+  }, [printing]);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
 
   useEffect(() => {
@@ -33,20 +41,12 @@ export const StudentIDCard: React.FC<StudentIDCardProps> = ({ student, onPrint }
   }, [student.student_number]);
 
   const activeEnrollment = student.enrollments?.[0];
-  const programmeName = activeEnrollment?.programme?.name || 'Higher National Diploma Studies';
-  const campusName = student.campus?.name || 'Colombo City Campus';
+  const programmeName = activeEnrollment?.programme?.name || 'Not enrolled';
+  const campusName = student.campus?.name || '—';
 
   const handlePrint = () => {
-    if (onPrint) {
-      onPrint();
-    } else {
-      window.print();
-    }
-    toast.success('Preparing printable student credential...');
-  };
-
-  const handleDownload = () => {
-    toast.success(`Downloaded Student ID Card PDF: ${student.student_number}.pdf`);
+    if (onPrint) onPrint();
+    else setPrinting(true);
   };
 
   return (
@@ -61,19 +61,15 @@ export const StudentIDCard: React.FC<StudentIDCardProps> = ({ student, onPrint }
           <RefreshCw className="w-3.5 h-3.5" />
           Flip to {isFlipped ? 'Front Side' : 'Reverse Side'}
         </Button>
-        <Button variant="outline" size="sm" onClick={handlePrint} className="text-xs h-8 gap-1.5">
+        <Button size="sm" onClick={handlePrint} className="text-xs h-8 gap-1.5 bg-primary text-primary-foreground" title="Prints both sides; choose “Save as PDF” in the print dialog to download">
           <Printer className="w-3.5 h-3.5" />
-          Print ID
-        </Button>
-        <Button size="sm" onClick={handleDownload} className="text-xs h-8 gap-1.5 bg-primary text-primary-foreground">
-          <Download className="w-3.5 h-3.5" />
-          Download PDF
+          Print / Save PDF
         </Button>
       </div>
 
       {/* ID Card Outer Container */}
-      <div className="perspective-1000 w-[380px] max-w-full">
-        {!isFlipped ? (
+      <div ref={cardRef} className="perspective-1000 w-[380px] max-w-full space-y-3">
+        {(printing || !isFlipped) && (
           /* FRONT SIDE */
           <div className="relative w-full aspect-[1.586/1] bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-950 text-white rounded-xl shadow-2xl p-4 overflow-hidden border border-slate-700 select-none">
             {/* Header / Brand */}
@@ -102,7 +98,7 @@ export const StudentIDCard: React.FC<StudentIDCardProps> = ({ student, onPrint }
               <div className="relative shrink-0">
                 <div className="w-20 h-24 rounded-lg overflow-hidden border-2 border-amber-400/80 shadow-md bg-slate-800">
                   <img
-                    src={student.photo_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80'}
+                    src={student.photo_url || `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 100'><rect width='80' height='100' fill='#1e293b'/><text x='40' y='60' font-family='sans-serif' font-size='30' font-weight='700' fill='#fbbf24' text-anchor='middle'>${student.full_name.split(/s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase()}</text></svg>`)}`}
                     alt={student.full_name}
                     className="w-full h-full object-cover"
                   />
@@ -136,7 +132,8 @@ export const StudentIDCard: React.FC<StudentIDCardProps> = ({ student, onPrint }
               <BarcodeRenderer value={student.student_number} height={28} width={1.4} />
             </div>
           </div>
-        ) : (
+        )}
+        {(printing || isFlipped) && (
           /* REVERSE SIDE */
           <div className="relative w-full aspect-[1.586/1] bg-slate-100 text-slate-900 rounded-xl shadow-2xl p-4 overflow-hidden border border-slate-300 select-none flex flex-col justify-between">
             {/* Top Security Line */}

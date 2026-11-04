@@ -4,7 +4,8 @@ import { toast } from 'sonner';
 import { supabase } from '@/db/supabase';
 import { useAuth, type PortalUser } from '@/contexts/AuthContext';
 import { USER_ROLES } from '@/contexts/AuthRoleContext';
-import type { UserRole } from '@/types/campus';
+import type { AuditLog, Lecturer, Student, UserRole } from '@/types/campus';
+import { campusApi } from '@/services/campusApi';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -79,6 +80,17 @@ export const PortalAccountsCard: React.FC = () => {
   const [role, setRole] = useState<UserRole>('admissions');
   const [password, setPassword] = useState('');
   const [saving, setSaving] = useState(false);
+  const [linkId, setLinkId] = useState('');
+  const [students, setStudents] = useState<Student[]>([]);
+  const [lecturers, setLecturers] = useState<Lecturer[]>([]);
+  const needsStudent = role === 'student' || role === 'parent';
+  const needsLecturer = role === 'lecturer';
+
+  useEffect(() => {
+    campusApi.getStudents().then(setStudents).catch(() => setStudents([]));
+    campusApi.getLecturers().then(setLecturers).catch(() => setLecturers([]));
+  }, []);
+  useEffect(() => setLinkId(''), [role]);
 
   const load = async () => {
     const { data, error } = await supabase.rpc('list_users');
@@ -92,12 +104,18 @@ export const PortalAccountsCard: React.FC = () => {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if ((needsStudent || needsLecturer) && !linkId) {
+      toast.error(needsLecturer ? 'Choose the lecturer record this login belongs to.' : 'Choose the student this login belongs to.');
+      return;
+    }
     setSaving(true);
     const { error } = await supabase.rpc('create_user', {
       p_username: username,
       p_display_name: displayName,
       p_role: role,
       p_password: password,
+      p_student: needsStudent ? linkId : null,
+      p_lecturer: needsLecturer ? linkId : null,
     });
     setSaving(false);
     if (error) {
@@ -156,6 +174,7 @@ export const PortalAccountsCard: React.FC = () => {
                 <td className="py-3 px-4">{a.display_name}</td>
                 <td className="py-3 px-4">
                   <Badge variant="outline" className="text-[10px] border-primary/30 text-primary">{roleLabel(a.role)}</Badge>
+                  {(a.student_name || a.lecturer_name) && <div className="text-[10px] text-muted-foreground mt-0.5">↳ {a.student_name ?? a.lecturer_name}</div>}
                 </td>
                 <td className="py-3 px-4 text-right whitespace-nowrap">
                   <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => handleReset(a)}>
@@ -173,7 +192,7 @@ export const PortalAccountsCard: React.FC = () => {
         </table>
       </div>
       <CardContent className="pt-4 border-t border-border">
-        <form onSubmit={handleCreate} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5 items-end">
+        <form onSubmit={handleCreate} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6 items-end">
           <div className="space-y-1.5">
             <Label className="text-xs">Username</Label>
             <Input required value={username} onChange={(e) => setUsername(e.target.value)} placeholder="e.g. finance.desk" />
@@ -193,6 +212,19 @@ export const PortalAccountsCard: React.FC = () => {
               </SelectContent>
             </Select>
           </div>
+          {(needsStudent || needsLecturer) && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">{needsLecturer ? 'Lecturer record' : 'Student'}</Label>
+              <Select value={linkId} onValueChange={setLinkId}>
+                <SelectTrigger className="text-xs"><SelectValue placeholder="Link to…" /></SelectTrigger>
+                <SelectContent>
+                  {needsLecturer
+                    ? lecturers.map((l) => <SelectItem key={l.id} value={l.id} className="text-xs">{l.lecturer_id} – {l.full_name}</SelectItem>)
+                    : students.map((st) => <SelectItem key={st.id} value={st.id} className="text-xs">{st.student_number} – {st.full_name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label className="text-xs">Password (min 8)</Label>
             <Input type="password" autoComplete="new-password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -202,6 +234,41 @@ export const PortalAccountsCard: React.FC = () => {
           </Button>
         </form>
       </CardContent>
+    </Card>
+  );
+};
+
+export const AuditLogCard: React.FC = () => {
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    campusApi.getAuditLogs(200).then(setLogs).catch((err) => toast.error(err.message)).finally(() => setLoading(false));
+  }, []);
+  return (
+    <Card className="shadow-sm border-border overflow-hidden">
+      <CardHeader className="pb-3 border-b border-border">
+        <CardTitle className="text-sm font-bold text-foreground">Audit Trail</CardTitle>
+        <CardDescription className="text-xs">Every change to students, finance, exams, accounts and more, written by the database. Entries cannot be edited or deleted.</CardDescription>
+      </CardHeader>
+      <div className="w-full overflow-x-auto max-h-96 overflow-y-auto">
+        <table className="w-full text-xs text-left">
+          <thead className="bg-muted/80 text-[10px] uppercase font-mono text-muted-foreground sticky top-0">
+            <tr><th className="py-2 px-3">When</th><th className="py-2 px-3">Who</th><th className="py-2 px-3">Action</th><th className="py-2 px-3">Record</th><th className="py-2 px-3">Details</th></tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {logs.length === 0 && <tr><td colSpan={5} className="py-4 px-3 text-muted-foreground italic">{loading ? 'Loading…' : 'No entries.'}</td></tr>}
+            {logs.map((l) => (
+              <tr key={l.id}>
+                <td className="py-2 px-3 font-mono whitespace-nowrap">{new Date(l.created_at).toLocaleString()}</td>
+                <td className="py-2 px-3">{l.user_role}</td>
+                <td className="py-2 px-3"><Badge variant="outline" className="text-[9px]">{l.action}</Badge></td>
+                <td className="py-2 px-3">{l.entity_type}</td>
+                <td className="py-2 px-3 text-muted-foreground">{l.details}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </Card>
   );
 };

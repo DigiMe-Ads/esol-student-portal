@@ -12,19 +12,21 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/contexts/AuthContext';
-import { ChangePasswordCard, PortalAccountsCard } from '@/components/settings/AccountPanels';
+import { AuditLogCard, ChangePasswordCard, PortalAccountsCard } from '@/components/settings/AccountPanels';
+import { usePermission } from '@/lib/permissions';
 
 export const SettingsPage: React.FC = () => {
   const { currentRole, setCurrentRole } = useAuthRole();
   const { user } = useAuth();
+  const can = usePermission();
 
   const permissionsMatrix = [
     { module: 'CRM & Lead Admissions', superAdmin: true, admissions: true, finance: false, lecturer: false, student: false },
     { module: 'Inquiry-to-Student Conversion', superAdmin: true, admissions: true, finance: false, lecturer: false, student: false },
     { module: 'Student Information System (SIS)', superAdmin: true, admissions: true, finance: true, lecturer: true, student: false },
-    { module: 'Barcode/QR Gate Attendance Scanner', superAdmin: true, admissions: true, finance: false, lecturer: true, student: false },
+    { module: 'Barcode/QR Gate Attendance Scanner', superAdmin: true, admissions: false, finance: false, lecturer: true, student: false },
     { module: 'LMS Coursework & Online Quizzes', superAdmin: true, admissions: false, finance: false, lecturer: true, student: true },
-    { module: 'Examinations & Grade Publishing', superAdmin: true, admissions: false, finance: false, lecturer: true, student: false },
+    { module: 'Examinations & Grade Publishing', superAdmin: true, admissions: false, finance: false, lecturer: false, student: false },
     { module: 'Finance & LKR Payment Verification', superAdmin: true, admissions: false, finance: true, lecturer: false, student: false },
     { module: 'Degree Certificate Generation', superAdmin: true, admissions: false, finance: false, lecturer: false, student: false },
   ];
@@ -95,6 +97,7 @@ export const SettingsPage: React.FC = () => {
       </Card>
 
       {user?.role === 'super_admin' && <PortalAccountsCard />}
+      {can('readAudit') && <AuditLogCard />}
       <ChangePasswordCard />
     </div>
   );

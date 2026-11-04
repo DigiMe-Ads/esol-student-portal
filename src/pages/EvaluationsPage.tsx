@@ -29,9 +29,10 @@ import {
   CheckCircle2,
   Lock,
 } from 'lucide-react';
-import { toast } from 'sonner';
+import { useAuthRole } from '@/contexts/AuthRoleContext';
 
 export const EvaluationsPage: React.FC = () => {
+  const { currentRole, portalLecturerId } = useAuthRole();
   const [evaluations, setEvaluations] = useState<EvaluationResponse[]>([]);
   const [lecturers, setLecturers] = useState<Lecturer[]>([]);
   const [modules, setModules] = useState<Module[]>([]);
@@ -65,28 +66,6 @@ export const EvaluationsPage: React.FC = () => {
     loadData();
   }, []);
 
-  const handleSubmitEvaluation = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await campusApi.submitEvaluationResponse({
-        form_id: 'default-form',
-        lecturer_id: targetLecturerId,
-        module_id: targetModuleId,
-        ratings: { overall: ratingScore },
-        comments: feedbackText,
-      });
-
-      toast.success(
-        'Evaluation submitted anonymously! Student identity has been stripped per academic privacy policy.'
-      );
-      setSurveyModalOpen(false);
-      setFeedbackText('');
-      loadData();
-    } catch (err: any) {
-      toast.error(`Evaluation submission failed: ${err.message}`);
-    }
-  };
-
   return (
     <div className="space-y-6">
       {/* Top Banner */}
@@ -105,19 +84,14 @@ export const EvaluationsPage: React.FC = () => {
           </p>
         </div>
 
-        <Button
-          size="sm"
-          onClick={() => setSurveyModalOpen(true)}
-          className="text-xs h-9 gap-1.5 bg-primary text-primary-foreground"
-        >
-          <Star className="w-4 h-4 text-amber-300" />
-          Submit Feedback Survey
-        </Button>
+        <Badge variant="secondary" className="px-3 py-1 font-mono text-xs">
+          {evaluations.length} anonymous response{evaluations.length === 1 ? '' : 's'}
+        </Badge>
       </div>
 
       {/* Aggregate Lecturer Rating Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {lecturers.map((lec) => {
+        {lecturers.filter((lec) => currentRole !== 'lecturer' || lec.id === portalLecturerId).map((lec) => {
           const lecEvals = evaluations.filter((e) => e.lecturer_id === lec.id);
           const avgRating =
             lecEvals.length > 0
@@ -125,7 +99,7 @@ export const EvaluationsPage: React.FC = () => {
                   lecEvals.reduce((a, b) => a + (b.ratings?.overall || 5), 0) /
                   lecEvals.length
                 ).toFixed(1)
-              : '4.8';
+              : null;
 
           return (
             <Card key={lec.id} className="shadow-sm border-border p-4 space-y-3">
@@ -135,7 +109,7 @@ export const EvaluationsPage: React.FC = () => {
                   <div className="text-[10px] text-muted-foreground font-mono">{lec.lecturer_id}</div>
                 </div>
                 <Badge className="bg-amber-500/15 text-amber-600 border-amber-300 text-xs font-bold gap-1">
-                  ⭐ {avgRating} / 5.0
+                  {avgRating ? `⭐ ${avgRating} / 5.0` : 'No ratings yet'}
                 </Badge>
               </div>
 
@@ -146,17 +120,17 @@ export const EvaluationsPage: React.FC = () => {
               {/* Feedback Snippets */}
               <div className="space-y-1.5 pt-1">
                 <div className="text-[10px] uppercase font-mono text-muted-foreground font-semibold flex items-center gap-1">
-                  <Lock className="w-3 h-3" /> Anonymous Student Comments ({lecEvals.length || 1}):
+                  <Lock className="w-3 h-3" /> Anonymous Student Comments ({lecEvals.filter((e) => e.comments).length}):
                 </div>
-                {lecEvals.length > 0 ? (
-                  lecEvals.slice(0, 2).map((ev) => (
+                {lecEvals.some((e) => e.comments) ? (
+                  lecEvals.filter((e) => e.comments).slice(0, 3).map((ev) => (
                     <div key={ev.id} className="p-2 rounded bg-muted/30 border border-border text-[11px] italic text-foreground/90">
                       "{ev.comments}"
                     </div>
                   ))
                 ) : (
                   <div className="p-2 rounded bg-muted/30 border border-border text-[11px] italic text-foreground/90">
-                    "Exceptional teaching clarity, very supportive during practical sessions."
+                    No written comments yet.
                   </div>
                 )}
               </div>
@@ -165,93 +139,6 @@ export const EvaluationsPage: React.FC = () => {
         })}
       </div>
 
-      {/* ANONYMOUS EVALUATION SURVEY MODAL */}
-      <Dialog open={surveyModalOpen} onOpenChange={setSurveyModalOpen}>
-        <DialogContent className="max-w-md text-xs">
-          <DialogHeader>
-            <DialogTitle className="text-base font-serif font-bold flex items-center gap-2">
-              <Lock className="w-4 h-4 text-emerald-600" />
-              Anonymous Teaching Evaluation
-            </DialogTitle>
-            <DialogDescription className="text-xs">
-              Your feedback is strictly confidential. No identifying metadata is stored with your response.
-            </DialogDescription>
-          </DialogHeader>
-
-          <form onSubmit={handleSubmitEvaluation} className="space-y-3.5 pt-2">
-            <div className="space-y-1">
-              <Label className="text-xs">Select Faculty / Lecturer</Label>
-              <Select value={targetLecturerId} onValueChange={setTargetLecturerId}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="text-xs">
-                  {lecturers.map((l) => (
-                    <SelectItem key={l.id} value={l.id}>
-                      {l.full_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs">Select Module</Label>
-              <Select value={targetModuleId} onValueChange={setTargetModuleId}>
-                <SelectTrigger className="h-8 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="text-xs">
-                  {modules.map((m) => (
-                    <SelectItem key={m.id} value={m.id}>
-                      {m.code} - {m.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs">Overall Quality Rating (1 - 5 Stars) *</Label>
-              <div className="flex gap-2 pt-1">
-                {[1, 2, 3, 4, 5].map((star) => (
-                  <Button
-                    key={star}
-                    type="button"
-                    variant={ratingScore >= star ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setRatingScore(star)}
-                    className="h-8 w-8 p-0"
-                  >
-                    ⭐
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              <Label className="text-xs">Constructive Feedback / Suggestions</Label>
-              <Textarea
-                required
-                rows={3}
-                value={feedbackText}
-                onChange={(e) => setFeedbackText(e.target.value)}
-                placeholder="Share your thoughts on teaching methodology, pacing, and learning resources..."
-                className="text-xs"
-              />
-            </div>
-
-            <DialogFooter className="pt-2">
-              <Button variant="outline" size="sm" type="button" onClick={() => setSurveyModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" size="sm" className="bg-primary text-primary-foreground">
-                Submit Anonymous Review
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };

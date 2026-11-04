@@ -27,8 +27,16 @@ import {
   Volume2,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useSearchParams } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
+import { usePermission } from '@/lib/permissions';
+import { todayISO } from '@/lib/print';
 
 export const AttendancePage: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const { user } = useAuth();
+  const can = usePermission();
+  const canRecord = can('recordAttendance');
   const [sessions, setSessions] = useState<ClassSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
@@ -49,7 +57,7 @@ export const AttendancePage: React.FC = () => {
   const loadData = () => {
     setLoading(true);
     Promise.all([
-      campusApi.getClassSessions(),
+      campusApi.getClassSessions().then((all) => all.filter((x) => x.date === todayISO() || x.id === searchParams.get('session'))),
       campusApi.getAttendanceRecords(),
       campusApi.getStudents(),
     ])
@@ -57,8 +65,10 @@ export const AttendancePage: React.FC = () => {
         setSessions(sess);
         setAttendanceRecords(records);
         setStudents(sList);
-        if (sess.length > 0 && !selectedSessionId) {
-          setSelectedSessionId(sess[0].id);
+        if (!selectedSessionId) {
+          const wanted = searchParams.get('session');
+          const todays = sess.filter((x) => x.date === todayISO() && x.status !== 'Cancelled');
+          setSelectedSessionId(sess.find((x) => x.id === wanted)?.id ?? todays[0]?.id ?? '');
         }
       })
       .finally(() => setLoading(false));
@@ -68,7 +78,8 @@ export const AttendancePage: React.FC = () => {
     loadData();
   }, []);
 
-  const activeSession = sessions.find((s) => s.id === selectedSessionId) || sessions[0];
+  const activeSession = sessions.find((s) => s.id === selectedSessionId);
+  const shownRecords = activeSession ? attendanceRecords.filter((r) => r.class_session_id === activeSession.id) : attendanceRecords;
 
   // Handle Barcode Scanner Submission (Enter key trigger from USB hardware scanner or manual input)
   const handleProcessScan = async (codeToScan?: string) => {
@@ -82,7 +93,8 @@ export const AttendancePage: React.FC = () => {
       const res = await campusApi.recordAttendanceScan({
         studentNumberOrCode: targetCode,
         sessionId: selectedSessionId || undefined,
-        scanMethod,
+        scanMethod: codeToScan ? 'Manual' : scanMethod,
+        recordedBy: user?.display_name,
       });
 
       setLastScannedResult(res);
@@ -93,6 +105,7 @@ export const AttendancePage: React.FC = () => {
       );
       loadData();
     } catch (err: any) {
+      setBarcodeInput(''); // ready for the next scan
       toast.error(err.message || 'Scan verification failed.', { icon: '⚠️' });
     }
   };
@@ -139,6 +152,10 @@ export const AttendancePage: React.FC = () => {
         </div>
       </div>
 
+      {sessions.length === 0 && (
+        <div className="text-xs p-3 rounded-lg border border-amber-500/30 bg-amber-500/10">No classes are timetabled for today. Schedule one in Batches & Timetables to take attendance.</div>
+      )}
+      {!canRecord && <div className="text-xs p-3 rounded-lg border border-border bg-muted/40">Your role can view attendance but not record check-ins.</div>}
       {/* Main Scanner Section */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Column: Barcode Terminal (2 Cols) */}
@@ -226,7 +243,7 @@ export const AttendancePage: React.FC = () => {
                   className="pl-9 h-10 text-xs font-mono"
                 />
               </div>
-              <Button type="submit" className="h-10 text-xs px-4 bg-primary text-primary-foreground gap-1.5 shrink-0">
+              <Button type="submit" disabled={!canRecord || !activeSession} className="h-10 text-xs px-4 bg-primary text-primary-foreground gap-1.5 shrink-0">
                 <CheckCircle2 className="w-4 h-4" />
                 Verify Check-In
               </Button>
@@ -235,14 +252,15 @@ export const AttendancePage: React.FC = () => {
             {/* Quick Simulation Badges for Testing */}
             <div className="pt-1">
               <div className="text-[11px] text-muted-foreground mb-1.5 font-medium">
-                Instant Simulation Shortcuts (Click any student to test live scan):
+                Manual check-in (students of this session's batch):
               </div>
               <div className="flex flex-wrap gap-1.5">
-                {students.slice(0, 4).map((s) => (
+                {students.filter((s) => s.enrollments?.some((e) => e.batch_id === activeSession?.batch_id)).map((s) => (
                   <Button
                     key={s.id}
                     variant="outline"
                     size="sm"
+                    disabled={!canRecord}
                     onClick={() => handleSimulateScan(s.student_number)}
                     className="h-6 text-[10px] px-2 font-mono gap-1 hover:border-primary hover:text-primary"
                   >
@@ -345,7 +363,7 @@ export const AttendancePage: React.FC = () => {
               </CardDescription>
             </div>
             <Badge variant="outline" className="text-xs">
-              {attendanceRecords.length} Records Logged
+              {shownRecords.length} Records Logged
             </Badge>
           </div>
         </CardHeader>
@@ -363,14 +381,14 @@ export const AttendancePage: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {attendanceRecords.length === 0 ? (
+              {shownRecords.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-muted-foreground italic">
-                    No attendance records logged yet today.
+                    No check-ins logged for this session yet.
                   </td>
                 </tr>
               ) : (
-                attendanceRecords.map((rec) => (
+                shownRecords.map((rec) => (
                   <tr key={rec.id} className="hover:bg-muted/30 transition-colors">
                     <td className="py-3 px-4 font-mono font-bold text-foreground">
                       {rec.student?.student_number || 'N/A'}

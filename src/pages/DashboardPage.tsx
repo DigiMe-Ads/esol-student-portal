@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { campusApi } from '@/services/campusApi';
-import type { Student, Inquiry, Invoice, ClassSession, Lecturer } from '@/types/campus';
+import type { Student, Inquiry, Invoice, ClassSession, Lecturer, Payment, Programme, Batch, SupportTicket, Examination } from '@/types/campus';
+import { useAuthRole } from '@/contexts/AuthRoleContext';
+import { usePermission } from '@/lib/permissions';
+import { todayISO } from '@/lib/print';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -41,29 +45,61 @@ export const DashboardPage: React.FC = () => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [sessions, setSessions] = useState<ClassSession[]>([]);
   const [lecturers, setLecturers] = useState<Lecturer[]>([]);
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [programmes, setProgrammes] = useState<Programme[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [tickets, setTickets] = useState<SupportTicket[]>([]);
+  const [exams, setExams] = useState<Examination[]>([]);
+  const [scansToday, setScansToday] = useState(0);
   const [loading, setLoading] = useState(true);
+  const { selectedCampusId, isRolePermitted } = useAuthRole();
+  const can = usePermission();
+  const seesFinance = can('readFinance');
+  const seesCRM = can('readCRM');
 
   useEffect(() => {
+    const none = <T,>() => Promise.resolve([] as T[]);
     Promise.all([
       campusApi.getStudents(),
-      campusApi.getInquiries(),
-      campusApi.getInvoices(),
+      seesCRM ? campusApi.getInquiries() : none<Inquiry>(),
+      seesFinance ? campusApi.getInvoices() : none<Invoice>(),
       campusApi.getClassSessions(),
       campusApi.getLecturers(),
+      seesFinance ? campusApi.getPayments() : none<Payment>(),
+      campusApi.getProgrammes(),
+      campusApi.getBatches(),
+      campusApi.getSupportTickets(),
+      campusApi.getExaminations(),
+      campusApi.getAttendanceRecords(),
     ])
-      .then(([s, i, inv, sess, lec]) => {
+      .then(([s, i, inv, sess, lec, pay, prog, bat, tick, ex, att]) => {
         setStudents(s);
         setInquiries(i);
         setInvoices(inv);
         setSessions(sess);
         setLecturers(lec);
+        setPayments(pay);
+        setProgrammes(prog);
+        setBatches(bat);
+        setTickets(tick);
+        setExams(ex);
+        setScansToday(att.filter((a) => a.scan_time.slice(0, 10) === todayISO()).length);
       })
+      .catch((err) => toast.error(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [seesFinance, seesCRM]);
 
-  // Compute KPI metrics
-  const totalStudents = students.length;
-  const activeStudents = students.filter((s) => s.status === 'Active').length;
+  // Compute KPI metrics (students & sessions follow the header campus filter)
+  const campusStudents = students.filter((s) => selectedCampusId === 'all' || s.campus_id === selectedCampusId);
+  const campusSessions = sessions.filter((s) => selectedCampusId === 'all' || s.campus_id === selectedCampusId);
+  const totalStudents = campusStudents.length;
+  const activeStudents = campusStudents.filter((s) => s.status === 'Active').length;
+  const today = todayISO();
+  const sessionsToday = campusSessions.filter((s) => s.date === today && s.status !== 'Cancelled');
+  const upcomingSessions = campusSessions.filter((s) => s.date >= today && s.status !== 'Cancelled');
+  const pendingSlips = payments.filter((p) => p.status === 'Pending').length;
+  const openTickets = tickets.filter((t) => t.status === 'Open' || t.status === 'In Progress').length;
+  const nextExam = exams.filter((e) => e.exam_date >= today).sort((a, b) => a.exam_date.localeCompare(b.exam_date))[0];
   const totalInquiries = inquiries.length;
   const convertedCount = inquiries.filter((i) => i.status === 'Registered').length;
   const conversionRate = totalInquiries > 0 ? Math.round((convertedCount / totalInquiries) * 100) : 0;
@@ -71,33 +107,30 @@ export const DashboardPage: React.FC = () => {
   const totalRevenueLKR = invoices.reduce((acc, inv) => acc + Number(inv.paid_amount || 0), 0);
   const outstandingLKR = invoices.reduce((acc, inv) => acc + Number(inv.balance_due || 0), 0);
 
-  // Revenue & Collections Trend Data
-  const revenueChartData = [
-    { month: 'May', collections: 420000, target: 500000 },
-    { month: 'Jun', collections: 680000, target: 600000 },
-    { month: 'Jul', collections: 590000, target: 650000 },
-    { month: 'Aug', collections: 890000, target: 800000 },
-    { month: 'Sep', collections: 1120000, target: 1000000 },
-    { month: 'Oct', collections: totalRevenueLKR > 0 ? totalRevenueLKR : 1250000, target: 1200000 },
-  ];
+  // Verified collections per month, last 6 months
+  const revenueChartData = Array.from({ length: 6 }, (_, k) => {
+    const d = new Date();
+    d.setDate(1);
+    d.setMonth(d.getMonth() - (5 - k));
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    return {
+      month: d.toLocaleString('en', { month: 'short' }),
+      collections: payments.filter((p) => p.status === 'Verified' && p.payment_date?.slice(0, 7) === key).reduce((a, p) => a + Number(p.amount), 0),
+    };
+  });
 
-  // Inquiries By Source Data
-  const inquirySourceData = [
-    { name: 'Website', value: 35, color: '#3b82f6' },
-    { name: 'Facebook', value: 25, color: '#6366f1' },
-    { name: 'Walk-in', value: 18, color: '#10b981' },
-    { name: 'Instagram', value: 14, color: '#f59e0b' },
-    { name: 'Referral', value: 8, color: '#ec4899' },
-  ];
+  // Inquiries by source
+  const palette = ['#3b82f6', '#6366f1', '#10b981', '#f59e0b', '#ec4899', '#64748b'];
+  const inquirySourceData = Object.entries(
+    inquiries.reduce<Record<string, number>>((acc, i) => ({ ...acc, [i.source]: (acc[i.source] ?? 0) + 1 }), {}),
+  ).map(([name, value], idx) => ({ name, value, color: palette[idx % palette.length] }));
 
-  // Programme Enrollment Breakdown
-  const programmeEnrollmentData = [
-    { name: 'DPEC Diploma', students: 18, capacity: 25 },
-    { name: 'Cambridge CAE', students: 14, capacity: 20 },
-    { name: 'TESL Cert', students: 12, capacity: 20 },
-    { name: 'IELTS Master', students: 16, capacity: 20 },
-    { name: 'HND English', students: 10, capacity: 15 },
-  ];
+  // Enrolment vs batch capacity per programme
+  const programmeEnrollmentData = programmes.map((p) => ({
+    name: p.code,
+    students: campusStudents.filter((st) => st.status === 'Active' && st.enrollments?.some((e) => e.programme_id === p.id)).length,
+    capacity: batches.filter((b) => b.intake?.programme_id === p.id).reduce((a, b) => a + Number(b.capacity), 0),
+  }));
 
   return (
     <div className="space-y-6">
@@ -113,19 +146,19 @@ export const DashboardPage: React.FC = () => {
             </Badge>
           </div>
           <p className="text-xs md:text-sm text-muted-foreground mt-1">
-            Real-time management intelligence for Colombo, Kandy & Galle campuses • Currency: Sri Lankan Rupees (LKR)
+            Live figures from the student portal database • Currency: Sri Lankan Rupees (LKR)
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Button
+          {isRolePermitted('attendance') && (<Button
             size="sm"
             onClick={() => navigate('/attendance')}
             className="text-xs h-9 gap-1.5 bg-primary text-primary-foreground shadow-sm"
           >
             <QrCode className="w-4 h-4" />
             Launch Barcode Scanner
-          </Button>
-          <Button
+          </Button>)}
+          {isRolePermitted('crm') && (<Button
             variant="outline"
             size="sm"
             onClick={() => navigate('/crm')}
@@ -133,7 +166,7 @@ export const DashboardPage: React.FC = () => {
           >
             <Users className="w-4 h-4" />
             Admissions Pipeline
-          </Button>
+          </Button>)}
         </div>
       </div>
 
@@ -153,7 +186,7 @@ export const DashboardPage: React.FC = () => {
             <div className="text-2xl font-bold font-serif text-foreground">{activeStudents}</div>
             <div className="flex items-center gap-1.5 mt-1 text-[11px] text-emerald-600 font-medium">
               <TrendingUp className="w-3.5 h-3.5" />
-              <span>{totalStudents} total registered (100% active retention)</span>
+              <span>{totalStudents} total registered ({totalStudents ? Math.round((activeStudents / totalStudents) * 100) : 0}% active)</span>
             </div>
           </CardContent>
         </Card>
@@ -170,11 +203,11 @@ export const DashboardPage: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold font-serif text-foreground">
-              LKR {totalRevenueLKR.toLocaleString()}
+              {seesFinance ? `LKR ${totalRevenueLKR.toLocaleString()}` : "—"}
             </div>
             <div className="flex items-center gap-1.5 mt-1 text-[11px] text-muted-foreground">
-              <span className="text-amber-600 font-medium">LKR {outstandingLKR.toLocaleString()}</span>
-              <span>due in current term</span>
+              <span className="text-amber-600 font-medium">{seesFinance ? `LKR ${outstandingLKR.toLocaleString()}` : "Finance data not available to this role"}</span>
+              {seesFinance && <span>outstanding</span>}
             </div>
           </CardContent>
         </Card>
@@ -190,7 +223,7 @@ export const DashboardPage: React.FC = () => {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold font-serif text-foreground">{totalInquiries} Leads</div>
+            <div className="text-2xl font-bold font-serif text-foreground">{seesCRM ? `${totalInquiries} Leads` : "—"}</div>
             <div className="flex items-center gap-1.5 mt-1 text-[11px] text-indigo-600 font-medium">
               <CheckCircle className="w-3.5 h-3.5" />
               <span>{conversionRate}% lead-to-student conversion</span>
@@ -212,7 +245,7 @@ export const DashboardPage: React.FC = () => {
             <div className="text-2xl font-bold font-serif text-foreground">{lecturers.length} Lecturers</div>
             <div className="flex items-center gap-1.5 mt-1 text-[11px] text-muted-foreground">
               <Clock className="w-3.5 h-3.5 text-blue-600" />
-              <span>{sessions.length} scheduled class sessions</span>
+              <span>{upcomingSessions.length} upcoming class sessions</span>
             </div>
           </CardContent>
         </Card>
@@ -228,17 +261,17 @@ export const DashboardPage: React.FC = () => {
                 Revenue & Fee Collection Performance (LKR)
               </CardTitle>
               <CardDescription className="text-xs">
-                Monthly tuition collection versus institutional target
+                Verified payments received per month (last 6 months)
               </CardDescription>
             </div>
-            <Button
+            {isRolePermitted('finance') && (<Button
               variant="outline"
               size="sm"
               onClick={() => navigate('/finance')}
               className="text-xs h-7 gap-1"
             >
               Finance Ledger <ArrowUpRight className="w-3 h-3" />
-            </Button>
+            </Button>)}
           </CardHeader>
           <CardContent>
             <div className="h-[280px] w-full min-w-0 overflow-hidden">
@@ -279,7 +312,7 @@ export const DashboardPage: React.FC = () => {
         <Card className="shadow-sm border-border">
           <CardHeader>
             <CardTitle className="text-sm font-bold text-foreground">Inquiry Acquisition Channels</CardTitle>
-            <CardDescription className="text-xs">Lead source distribution this term</CardDescription>
+            <CardDescription className="text-xs">Lead source distribution ({inquiries.length} inquiries)</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="h-[230px] w-full min-w-0 overflow-hidden flex items-center justify-center">
@@ -320,14 +353,14 @@ export const DashboardPage: React.FC = () => {
                 Current enrolled students vs maximum batch capacity
               </CardDescription>
             </div>
-            <Button
+            {isRolePermitted('academics') && (<Button
               variant="outline"
               size="sm"
               onClick={() => navigate('/academics')}
               className="text-xs h-7 gap-1"
             >
               Academic Structure <ArrowUpRight className="w-3 h-3" />
-            </Button>
+            </Button>)}
           </CardHeader>
           <CardContent>
             <div className="h-[250px] w-full min-w-0 overflow-hidden">
@@ -352,52 +385,37 @@ export const DashboardPage: React.FC = () => {
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-bold text-foreground">Operational Status</CardTitle>
               <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-600 border-emerald-300">
-                All Systems Normal
+                {loading ? 'Loading' : 'Live'}
               </Badge>
             </div>
             <CardDescription className="text-xs">Daily campus operational checklist</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3 flex-1 flex flex-col justify-between">
             <div className="space-y-2.5 text-xs">
-              <div className="flex items-start gap-2.5 p-2.5 rounded-lg bg-muted/40 border border-border">
-                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-semibold text-foreground">Barcode Gate Attendance Active</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Gate 01 and Multimedia Hall scanner terminals synchronized.
+              {[
+                { ok: sessionsToday.length > 0, title: `${sessionsToday.length} class session(s) today`, detail: `${scansToday} attendance check-in(s) recorded today • ${upcomingSessions.length} upcoming in total` },
+                ...(seesFinance ? [{ ok: pendingSlips === 0, title: pendingSlips ? `${pendingSlips} payment slip(s) awaiting verification` : 'No payment slips waiting', detail: 'Finance → Payment Receipts & Verification' }] : []),
+                { ok: openTickets === 0, title: openTickets ? `${openTickets} open support ticket(s)` : 'Support queue is clear', detail: 'Support Tickets' },
+                { ok: true, title: nextExam ? `Next exam: ${nextExam.title}` : 'No upcoming exams scheduled', detail: nextExam ? `${nextExam.exam_date} • ${nextExam.venue} • min attendance ${nextExam.min_attendance_pct}%` : 'Examinations' },
+              ].map((item) => (
+                <div key={item.title} className="flex items-start gap-2.5 p-2.5 rounded-lg bg-muted/40 border border-border">
+                  {item.ok ? <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />}
+                  <div>
+                    <div className="font-semibold text-foreground">{item.title}</div>
+                    <div className="text-[11px] text-muted-foreground">{item.detail}</div>
                   </div>
                 </div>
-              </div>
-
-              <div className="flex items-start gap-2.5 p-2.5 rounded-lg bg-muted/40 border border-border">
-                <CheckCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-semibold text-foreground">LMS Course Content Updated</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Module DPEC-M1 materials and timed grammar quiz published.
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-2.5 p-2.5 rounded-lg bg-muted/40 border border-border">
-                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <div className="font-semibold text-foreground">Exam Eligibility Clearance</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Automated 80% attendance rule applied to DPEC Term 1 candidates.
-                  </div>
-                </div>
-              </div>
+              ))}
             </div>
 
-            <Button
+            {isRolePermitted('students') && (<Button
               variant="outline"
               size="sm"
               onClick={() => navigate('/students')}
               className="w-full text-xs h-8 mt-2"
             >
               Inspect Student Directory
-            </Button>
+            </Button>)}
           </CardContent>
         </Card>
       </div>

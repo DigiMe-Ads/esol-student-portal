@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Lock, User, Loader2 } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { USER_ROLES } from '@/contexts/AuthRoleContext';
+import { routes } from '@/routes';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,20 +19,28 @@ export const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const signingIn = useRef(false);
 
-  if (user) return <Navigate to={from} replace />;
+  // already signed in when the page opened (not mid-login): go home
+  if (user && !signingIn.current) return <Navigate to="/" replace />;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
+    signingIn.current = true;
     const result = await signIn(username, password);
+    if (result.error) signingIn.current = false;
     setSubmitting(false);
-    if (result.error) {
-      setError(result.error);
+    if (result.error || !result.user) {
+      setError(result.error ?? 'Sign in failed.');
       return;
     }
-    navigate(from, { replace: true });
+    // Go back to the page that sent us here only if this account may open it; otherwise its home.
+    const allowed = USER_ROLES.find((r) => r.id === result.user!.role)?.allowedNav ?? [];
+    const target = routes.find((r) => r.path === from);
+    const ok = target && (allowed.includes('*') || allowed.includes(target.navKey));
+    navigate(ok ? from : '/', { replace: true });
   };
 
   return (

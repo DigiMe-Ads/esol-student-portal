@@ -174,3 +174,16 @@
     background-size: 4px 4px;
   }
 }
+
+/* Printing a single element (see src/lib/print.ts): everything else is hidden. */
+@media print {
+  body.printing-element * { visibility: hidden !important; }
+  body.printing-element .print-target,
+  body.printing-element .print-target * { visibility: visible !important; }
+  body.printing-element .print-target {
+    position: fixed !important; inset: 0 !important; margin: 0 auto !important;
+    max-width: 100% !important; overflow: visible !important; box-shadow: none !important;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  body.printing-element .no-print { display: none !important; }
+}

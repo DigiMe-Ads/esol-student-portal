@@ -1,8 +1,13 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { campusApi } from '@/services/campusApi';
+import { isStaffRole, roleCan } from '@/lib/permissions';
+import { todayISO } from '@/lib/print';
+import { ChangePasswordCard } from '@/components/settings/AccountPanels';
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useAuthRole, USER_ROLES } from '@/contexts/AuthRoleContext';
 import { useAuth } from '@/contexts/AuthContext';
-import type { UserRole } from '@/types/campus';
+import type { Campus, UserRole } from '@/types/campus';
 import {
   Search,
   Bell,
@@ -15,6 +20,7 @@ import {
   Calendar,
   LogOut,
   User,
+  KeyRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -33,6 +39,46 @@ import {
 } from '@/components/ui/popover';
 import { toast } from 'sonner';
 
+interface Alert {
+  id: string;
+  title: string;
+  detail: string;
+  at?: string;
+  path?: string;
+}
+
+// Staff see live work queues; students and parents see their notices.
+async function loadAlerts(role: UserRole, studentId: string | null): Promise<Alert[]> {
+  if (!isStaffRole(role)) {
+    const feed = await campusApi.getNotificationFeed();
+    return feed
+      .filter((n) => !studentId || n.student_id === studentId || !n.student_id)
+      .slice(0, 15)
+      .map((n) => ({ id: n.id, title: n.title, detail: n.message, at: n.created_at }));
+  }
+  const out: Alert[] = [];
+  const tasks: Promise<void>[] = [];
+  if (roleCan(role, 'verifyPayments')) {
+    tasks.push(campusApi.getPayments().then((p) => {
+      p.filter((x) => x.status === 'Pending').forEach((x) => out.push({ id: x.id, title: 'Payment slip to verify', detail: `LKR ${Number(x.amount).toLocaleString()} from ${x.student?.full_name ?? 'a student'}`, at: x.created_at, path: '/finance' }));
+    }));
+  }
+  if (role === 'super_admin' || ['campus_manager', 'admissions', 'receptionist'].includes(role)) {
+    tasks.push(campusApi.getSupportTickets().then((t) => {
+      t.filter((x) => x.status === 'Open').forEach((x) => out.push({ id: x.id, title: `Open ticket ${x.ticket_number}`, detail: `${x.subject} • ${x.student_name ?? ''}`, at: x.created_at, path: '/tickets' }));
+    }));
+  }
+  if (roleCan(role, 'manageCRM')) {
+    const today = todayISO();
+    tasks.push(campusApi.getInquiries().then((i) => {
+      i.filter((x) => x.follow_up_date && x.follow_up_date <= today && !['Registered', 'Lost'].includes(x.status))
+        .forEach((x) => out.push({ id: x.id, title: `Follow-up due: ${x.student_name}`, detail: `${x.ref_number} • ${x.status} • due ${x.follow_up_date}`, path: '/crm' }));
+    }));
+  }
+  await Promise.all(tasks);
+  return out.sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''));
+}
+
 interface TopHeaderProps {
   onOpenSearch: () => void;
   onOpenMobileMenu: () => void;
@@ -41,7 +87,9 @@ interface TopHeaderProps {
 export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSearch, onOpenMobileMenu }) => {
   const { currentRole, setCurrentRole, canSwitchRole, activeRoleConfig, selectedCampusId, setSelectedCampusId } = useAuthRole();
   const { user, signOut } = useAuth();
+  const { portalStudentId } = useAuthRole();
   const navigate = useNavigate();
+  const location = useLocation();
   const initials = (user?.display_name || 'EP')
     .split(/s+/)
     .map((w) => w[0])
@@ -49,10 +97,34 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSearch, onOpenMobile
     .slice(0, 2)
     .toUpperCase();
 
+  const [campuses, setCampuses] = useState<Campus[]>([]);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [seenAt, setSeenAt] = useState<string>(() => {
+    try { return localStorage.getItem(`esol-portal.seen.${user?.id}`) ?? ''; } catch { return ''; }
+  });
+  const [passwordOpen, setPasswordOpen] = useState(false);
+
+  useEffect(() => {
+    if (isStaffRole(currentRole)) campusApi.getCampuses().then(setCampuses).catch(() => setCampuses([]));
+  }, [currentRole]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadAlerts(currentRole, portalStudentId).then((a) => !cancelled && setAlerts(a)).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [currentRole, portalStudentId, location.pathname]);
+
+  const unread = alerts.filter((a) => !a.at || a.at > seenAt).length;
+  const markSeen = () => {
+    const now = new Date().toISOString();
+    setSeenAt(now);
+    try { localStorage.setItem(`esol-portal.seen.${user?.id}`, now); } catch { /* storage blocked */ }
+  };
+
   const handleSignOut = async () => {
+    navigate('/login', { replace: true }); // leave the page first so the next login starts at its own home
     await signOut();
     toast.info('Signed out of the portal.');
-    navigate('/login', { replace: true });
   };
   const [isDark, setIsDark] = useState<boolean>(() => {
     return document.documentElement.classList.contains('dark');
@@ -102,38 +174,26 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSearch, onOpenMobile
       {/* Right Controls */}
       <div className="flex items-center gap-2">
         {/* Campus Filter */}
+        {isStaffRole(currentRole) && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" className="hidden sm:flex text-xs h-8 gap-1.5 border-border">
               <Building className="w-3.5 h-3.5 text-muted-foreground" />
-              <span>
-                {selectedCampusId === 'all'
-                  ? 'All Campuses'
-                  : selectedCampusId === 'colombo'
-                  ? 'Colombo City'
-                  : selectedCampusId === 'kandy'
-                  ? 'Kandy Hill'
-                  : 'Galle Coastal'}
+              <span className="max-w-[120px] truncate">
+                {selectedCampusId === 'all' ? 'All Campuses' : campuses.find((c) => c.id === selectedCampusId)?.name ?? 'Campus'}
               </span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="text-xs">
-            <DropdownMenuLabel>Select Operational Campus</DropdownMenuLabel>
+            <DropdownMenuLabel>Filter by campus</DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => setSelectedCampusId('all')}>
-              All Campuses (Consolidated)
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setSelectedCampusId('colombo')}>
-              Colombo City Campus (Headquarters)
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setSelectedCampusId('kandy')}>
-              Kandy Hill Campus
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setSelectedCampusId('galle')}>
-              Galle Coastal Centre
-            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setSelectedCampusId('all')}>All Campuses (Consolidated)</DropdownMenuItem>
+            {campuses.map((c) => (
+              <DropdownMenuItem key={c.id} onClick={() => setSelectedCampusId(c.id)}>{c.name}</DropdownMenuItem>
+            ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        )}
 
         {/* User Role Switcher Pill (Super Admin only; other accounts are fixed to their role) */}
         {!canSwitchRole ? (
@@ -180,40 +240,27 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSearch, onOpenMobile
         )}
 
         {/* Notifications Popover */}
-        <Popover>
+        <Popover onOpenChange={(o) => o && markSeen()}>
           <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8 relative text-muted-foreground hover:text-foreground">
+            <Button variant="ghost" size="icon" className="h-8 w-8 relative text-muted-foreground hover:text-foreground" aria-label="Notifications">
               <Bell className="w-4 h-4" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-destructive" />
+              {unread > 0 && <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-destructive" />}
             </Button>
           </PopoverTrigger>
           <PopoverContent align="end" className="w-80 p-0 text-xs">
             <div className="p-3 border-b border-border flex items-center justify-between">
-              <span className="font-bold text-foreground">Campus Alerts & Updates</span>
-              <Badge variant="outline" className="text-[10px]">3 New</Badge>
+              <span className="font-bold text-foreground">{isStaffRole(currentRole) ? 'Needs attention' : 'Notices'}</span>
+              <Badge variant="outline" className="text-[10px]">{alerts.length}</Badge>
             </div>
-            <div className="divide-y divide-border max-h-64 overflow-y-auto">
-              <div className="p-3 hover:bg-muted/40 cursor-pointer">
-                <div className="font-semibold text-foreground">Verified Registration Payment</div>
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  LKR 75,000 received for Student EPC-2026-00001 (DPEC Term 1).
+            <div className="divide-y divide-border max-h-72 overflow-y-auto">
+              {alerts.length === 0 && <div className="p-3 text-muted-foreground italic">Nothing new.</div>}
+              {alerts.map((a) => (
+                <div key={a.id} className={`p-3 ${a.path ? 'hover:bg-muted/40 cursor-pointer' : ''}`} onClick={() => a.path && navigate(a.path)}>
+                  <div className="font-semibold text-foreground">{a.title}</div>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">{a.detail}</div>
+                  {a.at && <div className="text-[9px] text-muted-foreground mt-1">{new Date(a.at).toLocaleString()}</div>}
                 </div>
-                <div className="text-[9px] text-muted-foreground mt-1">10 minutes ago</div>
-              </div>
-              <div className="p-3 hover:bg-muted/40 cursor-pointer">
-                <div className="font-semibold text-foreground">Late Attendance Flag</div>
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  Student EPC-2026-00003 scanned late (+18 mins) in Hall 302.
-                </div>
-                <div className="text-[9px] text-muted-foreground mt-1">45 minutes ago</div>
-              </div>
-              <div className="p-3 hover:bg-muted/40 cursor-pointer">
-                <div className="font-semibold text-foreground">Examination Sign-off Ready</div>
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  Dr. Senanayake submitted marks for DPEC Term 1 module.
-                </div>
-                <div className="text-[9px] text-muted-foreground mt-1">2 hours ago</div>
-              </div>
+              ))}
             </div>
           </PopoverContent>
         </Popover>
@@ -247,13 +294,13 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSearch, onOpenMobile
               <div className="text-[10px] text-muted-foreground truncate">@{user?.username}</div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem onClick={() => toast.info('Academic Calendar: Year 2026 Term 1')}>
-              <Calendar className="w-3.5 h-3.5 mr-2" />
-              <span>Academic Year 2026</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => toast.success('Profile preferences loaded')}>
+            <DropdownMenuItem disabled>
               <User className="w-3.5 h-3.5 mr-2" />
-              <span>Campus Profile</span>
+              <span>{USER_ROLES.find((r) => r.id === user?.role)?.label}{user?.student_name ? ` • ${user.student_name}` : ''}{user?.lecturer_name ? ` • ${user.lecturer_name}` : ''}</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setPasswordOpen(true)}>
+              <KeyRound className="w-3.5 h-3.5 mr-2" />
+              <span>Change password</span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleSignOut}>
@@ -263,6 +310,12 @@ export const TopHeader: React.FC<TopHeaderProps> = ({ onOpenSearch, onOpenMobile
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      <Dialog open={passwordOpen} onOpenChange={setPasswordOpen}>
+        <DialogContent className="max-w-2xl p-0 border-0 bg-transparent shadow-none">
+          <DialogTitle className="sr-only">Change password</DialogTitle>
+          <ChangePasswordCard />
+        </DialogContent>
+      </Dialog>
     </header>
   );
 };

@@ -1,6 +1,8 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuthRole } from '@/contexts/AuthRoleContext';
+import { campusApi } from '@/services/campusApi';
+import { roleCan } from '@/lib/permissions';
 import {
   LayoutDashboard,
   Users2,
@@ -45,12 +47,17 @@ interface NavItem {
 
 export const Sidebar: React.FC<SidebarProps> = ({ collapsed, onToggleCollapse, onCloseMobile }) => {
   const { currentRole, activeRoleConfig, isRolePermitted } = useAuthRole();
+  const [openLeads, setOpenLeads] = React.useState<number | null>(null);
+  React.useEffect(() => {
+    if (!roleCan(currentRole, 'readCRM')) return setOpenLeads(null);
+    campusApi.getInquiries().then((l) => setOpenLeads(l.filter((i) => i.status !== 'Registered' && i.status !== 'Lost').length)).catch(() => setOpenLeads(null));
+  }, [currentRole]);
 
   const allNavItems: NavItem[] = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, key: 'dashboard' },
-    { name: 'CRM & Leads', path: '/crm', icon: Users2, key: 'crm', badge: '11 Leads' },
+    { name: 'CRM & Leads', path: '/crm', icon: Users2, key: 'crm', badge: openLeads !== null ? `${openLeads} Open` : undefined },
     { name: 'Students (SIS)', path: '/students', icon: GraduationCap, key: 'students' },
-    { name: 'Attendance Scanner', path: '/attendance', icon: QrCode, key: 'attendance', badge: 'Live' },
+    { name: 'Attendance Scanner', path: '/attendance', icon: QrCode, key: 'attendance' },
     { name: 'Academic Programmes', path: '/academics', icon: BookOpen, key: 'academics' },
     { name: 'Batches & Timetables', path: '/timetable', icon: CalendarDays, key: 'timetable' },
     { name: 'Lecturers & Staff', path: '/lecturers', icon: UserCheck, key: 'lecturers' },

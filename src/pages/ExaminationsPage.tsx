@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { campusApi } from '@/services/campusApi';
-import type { Examination, ExamRegistration, Student } from '@/types/campus';
+import type { Examination, ExamRegistration, Module } from '@/types/campus';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,10 +23,24 @@ import {
   Award,
   ShieldCheck,
   Edit,
+  Plus,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useAuth } from '@/contexts/AuthContext';
+import { usePermission } from '@/lib/permissions';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+
+const gradeFor = (val: number) =>
+  val >= 85 ? 'A (Distinction)' : val >= 75 ? 'B+ (Merit)' : val >= 65 ? 'B (Credit)' : val >= 50 ? 'C (Pass)' : 'F (Resit Required)';
 
 export const ExaminationsPage: React.FC = () => {
+  const { user } = useAuth();
+  const can = usePermission();
+  const canManage = can('manageExams');
+  const [modules, setModules] = useState<Module[]>([]);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [examForm, setExamForm] = useState({ title: '', exam_code: '', module_id: '', exam_date: '', start_time: '09:00', end_time: '12:00', venue: '', fee_lkr: 0, min_attendance_pct: 80 });
   const [exams, setExams] = useState<Examination[]>([]);
   const [selectedExamId, setSelectedExamId] = useState<string>('');
   const [registrations, setRegistrations] = useState<ExamRegistration[]>([]);
@@ -40,6 +54,7 @@ export const ExaminationsPage: React.FC = () => {
 
   const loadData = () => {
     setLoading(true);
+    if (canManage) campusApi.getModules().then(setModules).catch(() => setModules([]));
     campusApi
       .getExaminations()
       .then(async (eList) => {
@@ -66,40 +81,72 @@ export const ExaminationsPage: React.FC = () => {
 
   const handleOpenEditMarks = (reg: ExamRegistration) => {
     setActiveReg(reg);
-    setMarkInput(reg.marks || 80);
-    setGradeInput(reg.grade || 'A (Distinction)');
+    setMarkInput(reg.marks ?? 0);
+    setGradeInput(reg.grade || gradeFor(reg.marks ?? 0));
     setEditModalOpen(true);
   };
 
   const handleCalculateGrade = (val: number) => {
     setMarkInput(val);
-    if (val >= 85) setGradeInput('A (Distinction)');
-    else if (val >= 75) setGradeInput('B+ (Merit)');
-    else if (val >= 65) setGradeInput('B (Credit)');
-    else if (val >= 50) setGradeInput('C (Pass)');
-    else setGradeInput('F (Resit Required)');
+    setGradeInput(gradeFor(val));
   };
 
-  const handleSaveMarks = async (publish: boolean) => {
+  const handleSaveMarks = async (status: 'Draft' | 'Approved' | 'Published') => {
     if (!activeReg) return;
+    if (markInput < 0 || markInput > 100) {
+      toast.error('Marks must be between 0 and 100.');
+      return;
+    }
     try {
-      await campusApi.updateExamResult(
-        activeReg.id,
-        markInput,
-        gradeInput,
-        publish ? 'Published' : 'Approved',
-        'Academic Dean Office'
-      );
-      toast.success(
-        `Marks updated (${markInput}%, ${gradeInput}) and status set to: ${
-          publish ? 'Published' : 'Approved'
-        }!`
-      );
+      await campusApi.updateExamResult(activeReg.id, markInput, gradeInput, status, user?.display_name ?? 'Examination Office');
+      if (status === 'Published') {
+        await campusApi.createNotification({
+          student_id: activeReg.student_id,
+          title: 'Exam result published',
+          message: `Your result for ${activeExam?.title ?? 'an exam'} is now available: ${markInput}% (${gradeInput}).`,
+          sent_by: user?.display_name,
+        }).catch(() => undefined);
+      }
+      toast.success(`Marks saved (${markInput}%, ${gradeInput}) as ${status}${status === 'Published' ? '; the student can now see it' : ''}.`);
       setEditModalOpen(false);
-      const rList = await campusApi.getExamRegistrations(selectedExamId);
-      setRegistrations(rList);
+      setRegistrations(await campusApi.getExamRegistrations(selectedExamId));
     } catch (err: any) {
       toast.error(`Error saving marks: ${err.message}`);
+    }
+  };
+
+  const handleRegisterCandidates = async () => {
+    if (!activeExam) return;
+    setBusy(true);
+    try {
+      const r = await campusApi.registerExamCandidates(activeExam.id);
+      toast.success(`Eligibility checked for ${r.checked} candidate(s); ${r.registered} registered in total.`);
+      setRegistrations(await campusApi.getExamRegistrations(activeExam.id));
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleScheduleExam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (examForm.end_time <= examForm.start_time) {
+      toast.error('End time must be after the start time.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const ex = await campusApi.createExamination(examForm);
+      toast.success(`${ex.title} scheduled for ${ex.exam_date}.`);
+      setScheduleOpen(false);
+      setSelectedExamId(ex.id);
+      setExams(await campusApi.getExaminations());
+      setRegistrations([]);
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -119,9 +166,17 @@ export const ExaminationsPage: React.FC = () => {
             </Badge>
           </div>
           <p className="text-xs md:text-sm text-muted-foreground mt-1">
-            Exam schedules, eligibility rules enforcement (≥80% attendance + fee clearance), mark entry, two-tier approval, and grade publishing.
+            Exam schedules, eligibility rules enforcement (attendance threshold + fee clearance), mark entry, two-tier approval, and grade publishing.
           </p>
         </div>
+        {canManage && (
+          <Button size="sm" onClick={() => {
+            setExamForm({ title: '', exam_code: '', module_id: modules[0]?.id ?? '', exam_date: '', start_time: '09:00', end_time: '12:00', venue: '', fee_lkr: 0, min_attendance_pct: 80 });
+            setScheduleOpen(true);
+          }} className="text-xs h-9 gap-1.5 bg-primary text-primary-foreground">
+            <Plus className="w-4 h-4" /> Schedule Exam
+          </Button>
+        )}
       </div>
 
       {/* Main Grid: Exam Selector (1 col) & Candidates/Marks (3 cols) */}
@@ -176,9 +231,16 @@ export const ExaminationsPage: React.FC = () => {
                       Venue: {activeExam.venue} • Required Attendance Threshold: {activeExam.min_attendance_pct}%
                     </CardDescription>
                   </div>
-                  <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-300">
-                    Exam Fee: LKR {activeExam.fee_lkr.toLocaleString()}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-300">
+                      Exam Fee: LKR {Number(activeExam.fee_lkr).toLocaleString()}
+                    </Badge>
+                    {canManage && (
+                      <Button size="sm" variant="outline" disabled={busy} onClick={handleRegisterCandidates} className="h-7 text-[11px] gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5" /> Register / Recheck Candidates
+                      </Button>
+                    )}
+                  </div>
                 </div>
               </CardHeader>
 
@@ -187,7 +249,7 @@ export const ExaminationsPage: React.FC = () => {
                 <div className="p-3 bg-muted/40 rounded-lg border border-border text-xs flex items-center gap-2.5">
                   <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                   <div className="text-[11px] text-muted-foreground">
-                    <strong className="text-foreground">Eligibility Gate Active:</strong> Students with attendance under {activeExam.min_attendance_pct}% or overdue fee installments require Academic Dean authorization.
+                    <strong className="text-foreground">Eligibility Gate:</strong> "Register / Recheck Candidates" enrols every active student of {activeExam.module?.code}'s programme and marks them ineligible if attendance is under {activeExam.min_attendance_pct}% or any fees are outstanding. Ineligible candidates cannot be marked.
                   </div>
                 </div>
 
@@ -232,6 +294,7 @@ export const ExaminationsPage: React.FC = () => {
                               >
                                 {reg.eligibility_status}
                               </Badge>
+                              {reg.eligibility_reason && <div className="text-[10px] text-muted-foreground mt-0.5">{reg.eligibility_reason}</div>}
                             </td>
                             <td className="py-2.5 px-3 font-mono font-bold text-foreground">
                               {reg.marks !== null && reg.marks !== undefined ? `${reg.marks}%` : 'Pending'}
@@ -251,15 +314,15 @@ export const ExaminationsPage: React.FC = () => {
                               </Badge>
                             </td>
                             <td className="py-2.5 px-3 text-right">
-                              <Button
+                              {canManage && reg.eligibility_status !== 'Ineligible' && <Button
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleOpenEditMarks(reg)}
                                 className="h-6 text-[10px] px-2 gap-1 border-primary/30 text-primary"
                               >
                                 <Edit className="w-3 h-3" />
-                                Enter Mark
-                              </Button>
+                                {reg.marks != null ? 'Edit Mark' : 'Enter Mark'}
+                              </Button>}
                             </td>
                           </tr>
                         ))
@@ -319,19 +382,57 @@ export const ExaminationsPage: React.FC = () => {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleSaveMarks(false)}
+              onClick={() => handleSaveMarks('Draft')}
               className="text-xs"
             >
               Save Draft
             </Button>
             <Button
+              variant="outline"
               size="sm"
-              onClick={() => handleSaveMarks(true)}
+              onClick={() => handleSaveMarks('Approved')}
+              className="text-xs"
+            >
+              Approve
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => handleSaveMarks('Published')}
               className="bg-primary text-primary-foreground text-xs"
             >
-              Approve & Publish to Student Portal
+              Publish to Student
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SCHEDULE EXAM */}
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent className="max-w-lg text-xs">
+          <DialogHeader>
+            <DialogTitle className="text-base font-serif font-bold">Schedule Examination</DialogTitle>
+            <DialogDescription className="text-xs">Then use "Register / Recheck Candidates" to enrol eligible students.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleScheduleExam} className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Input required value={examForm.title} onChange={(e) => setExamForm({ ...examForm, title: e.target.value })} placeholder="Exam title" className="h-8 text-xs col-span-2" />
+              <Input required value={examForm.exam_code} onChange={(e) => setExamForm({ ...examForm, exam_code: e.target.value.toUpperCase() })} placeholder="Exam code (unique)" className="h-8 text-xs" />
+              <Select value={examForm.module_id} onValueChange={(v) => setExamForm({ ...examForm, module_id: v })}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Module" /></SelectTrigger>
+                <SelectContent className="text-xs">{modules.map((m) => <SelectItem key={m.id} value={m.id}>{m.code} – {m.name}</SelectItem>)}</SelectContent>
+              </Select>
+              <div className="space-y-1"><Label className="text-[10px]">Date</Label><Input type="date" required value={examForm.exam_date} onChange={(e) => setExamForm({ ...examForm, exam_date: e.target.value })} className="h-8 text-xs" /></div>
+              <div className="space-y-1"><Label className="text-[10px]">Venue</Label><Input required value={examForm.venue} onChange={(e) => setExamForm({ ...examForm, venue: e.target.value })} className="h-8 text-xs" /></div>
+              <div className="space-y-1"><Label className="text-[10px]">Start</Label><Input type="time" required value={examForm.start_time} onChange={(e) => setExamForm({ ...examForm, start_time: e.target.value })} className="h-8 text-xs" /></div>
+              <div className="space-y-1"><Label className="text-[10px]">End</Label><Input type="time" required value={examForm.end_time} onChange={(e) => setExamForm({ ...examForm, end_time: e.target.value })} className="h-8 text-xs" /></div>
+              <div className="space-y-1"><Label className="text-[10px]">Exam fee (LKR)</Label><Input type="number" min={0} value={examForm.fee_lkr} onChange={(e) => setExamForm({ ...examForm, fee_lkr: Number(e.target.value) })} className="h-8 text-xs" /></div>
+              <div className="space-y-1"><Label className="text-[10px]">Minimum attendance %</Label><Input type="number" min={0} max={100} value={examForm.min_attendance_pct} onChange={(e) => setExamForm({ ...examForm, min_attendance_pct: Number(e.target.value) })} className="h-8 text-xs" /></div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" size="sm" onClick={() => setScheduleOpen(false)}>Cancel</Button>
+              <Button type="submit" size="sm" disabled={busy || !examForm.module_id}>Schedule</Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

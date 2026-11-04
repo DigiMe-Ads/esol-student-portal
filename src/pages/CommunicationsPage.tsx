@@ -1,152 +1,187 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { campusApi } from '@/services/campusApi';
+import { useAuth } from '@/contexts/AuthContext';
+import type { Batch, Student, SystemNotification } from '@/types/campus';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
-  MessageSquare,
-  Mail,
-  Send,
-  Phone,
-  CheckCircle2,
-  Clock,
-  Sparkles,
-} from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Send } from 'lucide-react';
 import { toast } from 'sonner';
 
-export const CommunicationsPage: React.FC = () => {
-  const [channel, setChannel] = useState<'SMS' | 'WhatsApp' | 'Email'>('WhatsApp');
-  const [recipientGroup, setRecipientGroup] = useState('All Weekend Batch Students');
-  const [template, setTemplate] = useState('Exam Hall Notice');
-  const [messageBody, setMessageBody] = useState(
-    'Dear Student, Your term examination is scheduled for Saturday at 09:00 AM at Hall 302, ESOL Premier Campus Colombo. Please bring your scannable Student ID card.'
-  );
+const TEMPLATES: Record<string, { title: string; message: string }> = {
+  exam: { title: 'Exam hall notice', message: 'Your examination is scheduled for Saturday at 09:00 AM. Please bring your scannable Student ID card.' },
+  fees: { title: 'Fee installment reminder', message: 'A fee installment is due soon. Please check the Fees tab in your portal and submit your payment slip.' },
+  cancel: { title: 'Class cancellation', message: 'Today\'s class has been cancelled. A make-up session will be announced on your timetable.' },
+};
 
-  const handleSendBroadcast = (e: React.FormEvent) => {
+export const CommunicationsPage: React.FC = () => {
+  const { user } = useAuth();
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [log, setLog] = useState<SystemNotification[]>([]);
+  const [audience, setAudience] = useState('student');
+  const [batchId, setBatchId] = useState('');
+  const [studentId, setStudentId] = useState('');
+  const [title, setTitle] = useState('');
+  const [messageBody, setMessageBody] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const load = () =>
+    Promise.all([campusApi.getBatches(), campusApi.getStudents(), campusApi.getNotificationFeed()])
+      .then(([b, s, n]) => {
+        setBatches(b);
+        setStudents(s);
+        setLog(n);
+        setBatchId((p) => p || b[0]?.id || '');
+        setStudentId((p) => p || s[0]?.id || '');
+      })
+      .catch((err) => toast.error(err.message));
+  useEffect(() => {
+    load();
+  }, []);
+
+  const recipients = (() => {
+    if (audience === 'batch') return students.filter((s) => s.enrollments?.some((e) => e.batch_id === batchId)).length;
+    if (audience === 'one') return 1;
+    return students.length;
+  })();
+
+  const handleSendBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    toast.success(
-      `Broadcast dispatched successfully via ${channel} to ${recipientGroup}! (32 messages queued)`
-    );
+    setSending(true);
+    try {
+      await campusApi.createNotification({
+        title,
+        message: messageBody,
+        sent_by: user?.display_name,
+        user_role: audience === 'student' || audience === 'parent' || audience === 'All' ? audience : 'All',
+        target_batch_id: audience === 'batch' ? batchId : undefined,
+        student_id: audience === 'one' ? studentId : undefined,
+      });
+      toast.success('Notice published. Recipients see it under Notices in their portal.');
+      setTitle('');
+      setMessageBody('');
+      load();
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setSending(false);
+    }
   };
+
+  const describe = (n: SystemNotification) =>
+    n.student ? `Student: ${n.student.full_name}` : n.batch ? `Batch: ${n.batch.name}` : n.user_role === 'All' ? 'Everyone' : `All ${n.user_role}s`;
 
   return (
     <div className="space-y-6">
-      {/* Top Banner */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-card border border-border p-5 rounded-xl shadow-sm">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-xl md:text-2xl font-serif font-bold text-foreground tracking-tight">
-              Institutional Communications Hub
-            </h1>
-            <Badge variant="outline" className="border-primary/30 text-primary text-[10px]">
-              Multi-Channel Broadcast
-            </Badge>
+            <h1 className="text-xl md:text-2xl font-serif font-bold text-foreground tracking-tight">Institutional Communications Hub</h1>
+            <Badge variant="outline" className="border-primary/30 text-primary text-[10px]">In-app Notices</Badge>
           </div>
           <p className="text-xs md:text-sm text-muted-foreground mt-1">
-            Automated SMS notifications, WhatsApp updates, email circulars, and dispatch audit logs.
+            Publish notices to students and parents. They appear under Notices in the student and parent portals.
           </p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Broadcast Form */}
         <Card className="lg:col-span-2 shadow-sm border-border">
           <CardHeader className="pb-3 border-b border-border">
-            <CardTitle className="text-sm font-bold text-foreground">Compose Broadcast Announcement</CardTitle>
-            <CardDescription className="text-xs">
-              Reach students, parents, or faculty across automated mobile channels
-            </CardDescription>
+            <CardTitle className="text-sm font-bold text-foreground">Compose Announcement</CardTitle>
+            <CardDescription className="text-xs">SMS, WhatsApp and email gateways are not connected yet, so notices are delivered in-app.</CardDescription>
           </CardHeader>
-
           <form onSubmit={handleSendBroadcast} className="p-5 space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="space-y-1">
                 <Label className="text-xs">Delivery Channel</Label>
-                <Select value={channel} onValueChange={(v: any) => setChannel(v)}>
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
+                <Select value="In-app" onValueChange={() => undefined}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent className="text-xs">
-                    <SelectItem value="WhatsApp">WhatsApp Gateway (+94)</SelectItem>
-                    <SelectItem value="SMS">Direct SMS (Dialog / Mobitel)</SelectItem>
-                    <SelectItem value="Email">Campus Email Broadcast</SelectItem>
+                    <SelectItem value="In-app">In-app portal notice</SelectItem>
+                    <SelectItem value="SMS" disabled>SMS (not connected)</SelectItem>
+                    <SelectItem value="WhatsApp" disabled>WhatsApp (not connected)</SelectItem>
+                    <SelectItem value="Email" disabled>Email (not connected)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-
               <div className="space-y-1">
-                <Label className="text-xs">Recipient Batch</Label>
-                <Select value={recipientGroup} onValueChange={setRecipientGroup}>
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
+                <Label className="text-xs">Recipients</Label>
+                <Select value={audience} onValueChange={setAudience}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent className="text-xs">
-                    <SelectItem value="All Weekend Batch Students">All Weekend Batch Students</SelectItem>
-                    <SelectItem value="DPEC 2026 Batch A">DPEC 2026 Batch A</SelectItem>
-                    <SelectItem value="Parents of Overdue Installments">Parents of Overdue Installments</SelectItem>
-                    <SelectItem value="All Academic Faculty">All Academic Faculty</SelectItem>
+                    <SelectItem value="All">Everyone (students & parents)</SelectItem>
+                    <SelectItem value="student">All students</SelectItem>
+                    <SelectItem value="parent">All parents / guardians</SelectItem>
+                    <SelectItem value="batch">One batch</SelectItem>
+                    <SelectItem value="one">One student</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Template</Label>
+                <Select onValueChange={(k) => { setTitle(TEMPLATES[k].title); setMessageBody(TEMPLATES[k].message); }}>
+                  <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Start from a template" /></SelectTrigger>
+                  <SelectContent className="text-xs">
+                    <SelectItem value="exam">Exam hall notice</SelectItem>
+                    <SelectItem value="fees">Fee reminder</SelectItem>
+                    <SelectItem value="cancel">Class cancellation</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
-
+            {audience === 'batch' && (
+              <Select value={batchId} onValueChange={setBatchId}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Batch" /></SelectTrigger>
+                <SelectContent className="text-xs">{batches.map((b) => <SelectItem key={b.id} value={b.id}>{b.name} ({b.code})</SelectItem>)}</SelectContent>
+              </Select>
+            )}
+            {audience === 'one' && (
+              <Select value={studentId} onValueChange={setStudentId}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Student" /></SelectTrigger>
+                <SelectContent className="text-xs">{students.map((s) => <SelectItem key={s.id} value={s.id}>{s.student_number} – {s.full_name}</SelectItem>)}</SelectContent>
+              </Select>
+            )}
             <div className="space-y-1">
-              <Label className="text-xs">Notification Message Content</Label>
-              <Textarea
-                rows={4}
-                value={messageBody}
-                onChange={(e) => setMessageBody(e.target.value)}
-                className="text-xs"
-              />
+              <Label className="text-xs">Title</Label>
+              <Input required value={title} onChange={(e) => setTitle(e.target.value)} className="h-8 text-xs" />
             </div>
-
-            <Button type="submit" className="h-9 text-xs bg-primary text-primary-foreground gap-1.5">
-              <Send className="w-4 h-4" /> Send Instant Broadcast
-            </Button>
+            <div className="space-y-1">
+              <Label className="text-xs">Message</Label>
+              <Textarea required rows={4} value={messageBody} onChange={(e) => setMessageBody(e.target.value)} className="text-xs" />
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-muted-foreground">
+                Reaches {audience === 'parent' ? 'parent logins of' : ''} {recipients} student record{recipients === 1 ? '' : 's'}.
+              </span>
+              <Button type="submit" disabled={sending} className="h-9 text-xs bg-primary text-primary-foreground gap-1.5">
+                <Send className="w-4 h-4" /> Publish Notice
+              </Button>
+            </div>
           </form>
         </Card>
 
-        {/* Live Logs Feed */}
         <Card className="shadow-sm border-border">
           <CardHeader className="pb-3 border-b border-border">
-            <CardTitle className="text-sm font-bold text-foreground">Recent Dispatch Logs</CardTitle>
-            <CardDescription className="text-xs">Delivery status audit log</CardDescription>
+            <CardTitle className="text-sm font-bold text-foreground">Dispatch Log</CardTitle>
+            <CardDescription className="text-xs">Notices published from the portal (latest first)</CardDescription>
           </CardHeader>
-          <CardContent className="p-4 space-y-3">
-            <div className="space-y-2 text-xs">
-              <div className="p-2.5 rounded-lg bg-muted/40 border border-border space-y-1">
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-foreground">Registration Invoice Alert</span>
-                  <Badge className="bg-emerald-600 text-white text-[8px]">Delivered</Badge>
+          <CardContent className="p-4 space-y-2 max-h-[480px] overflow-y-auto">
+            {log.length === 0 && <div className="text-xs text-muted-foreground italic">Nothing sent yet.</div>}
+            {log.map((n) => (
+              <div key={n.id} className="p-2.5 rounded-lg bg-muted/40 border border-border space-y-1 text-xs">
+                <div className="flex justify-between items-center gap-2">
+                  <span className="font-semibold text-foreground truncate">{n.title}</span>
+                  <Badge className="bg-emerald-600 text-white text-[8px] shrink-0">{n.channel}</Badge>
                 </div>
-                <div className="text-[10px] text-muted-foreground">WhatsApp • Student: Kavinda Perera</div>
+                <div className="text-[10px] text-muted-foreground">{describe(n)} • {n.sent_by ?? 'System'} • {new Date(n.created_at).toLocaleString()}</div>
               </div>
-
-              <div className="p-2.5 rounded-lg bg-muted/40 border border-border space-y-1">
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-foreground">Class Cancellation Reminder</span>
-                  <Badge className="bg-emerald-600 text-white text-[8px]">Delivered</Badge>
-                </div>
-                <div className="text-[10px] text-muted-foreground">SMS • Batch: CAE Weekend</div>
-              </div>
-
-              <div className="p-2.5 rounded-lg bg-muted/40 border border-border space-y-1">
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-foreground">Exam Eligibility Clearance</span>
-                  <Badge className="bg-emerald-600 text-white text-[8px]">Delivered</Badge>
-                </div>
-                <div className="text-[10px] text-muted-foreground">Email • 18 Candidates</div>
-              </div>
-            </div>
+            ))}
           </CardContent>
         </Card>
       </div>

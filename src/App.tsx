@@ -6,6 +6,7 @@ import { Toaster } from '@/components/ui/sonner';
 import { AuthProvider } from '@/contexts/AuthContext';
 import { AuthRoleProvider } from '@/contexts/AuthRoleContext';
 import { LoginPage } from '@/pages/LoginPage';
+import { VerifyCertificatePage } from '@/pages/VerifyCertificatePage';
 import { routes } from './routes';
 
 const App: React.FC = () => {
@@ -19,6 +20,7 @@ const App: React.FC = () => {
               <main className="flex-grow">
                 <Routes>
                   <Route path="/login" element={<LoginPage />} />
+                  <Route path="/verify/:code" element={<VerifyCertificatePage />} />
                   {routes.map((route, index) => (
                     <Route
                       key={index}

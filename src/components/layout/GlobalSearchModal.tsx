@@ -10,6 +10,8 @@ import {
   CommandSeparator,
 } from '@/components/ui/command';
 import { campusApi } from '@/services/campusApi';
+import { useAuthRole } from '@/contexts/AuthRoleContext';
+import { isStaffRole } from '@/lib/permissions';
 import type { Student, Inquiry, Programme, Lecturer } from '@/types/campus';
 import {
   User,
@@ -34,15 +36,17 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ open, onOp
   const [programmes, setProgrammes] = useState<Programme[]>([]);
   const [lecturers, setLecturers] = useState<Lecturer[]>([]);
   const [loading, setLoading] = useState(false);
+  const { isRolePermitted, currentRole } = useAuthRole();
+  const staff = isStaffRole(currentRole);
 
   useEffect(() => {
     if (open) {
       setLoading(true);
       Promise.all([
-        campusApi.getStudents(),
-        campusApi.getInquiries(),
+        staff && isRolePermitted('students') ? campusApi.getStudents() : Promise.resolve([]),
+        isRolePermitted('crm') ? campusApi.getInquiries() : Promise.resolve([]),
         campusApi.getProgrammes(),
-        campusApi.getLecturers(),
+        staff ? campusApi.getLecturers() : Promise.resolve([]),
       ])
         .then(([sData, iData, pData, lData]) => {
           setStudents(sData);
@@ -67,22 +71,22 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ open, onOp
 
         {/* Quick Actions */}
         <CommandGroup heading="System Shortcuts">
-          <CommandItem onSelect={() => handleSelect(() => navigate('/attendance'))}>
+          {isRolePermitted('attendance') && <CommandItem onSelect={() => handleSelect(() => navigate('/attendance'))}>
             <QrCode className="mr-2 h-4 w-4 text-primary" />
             <span>Barcode & QR Attendance Scanner</span>
-          </CommandItem>
-          <CommandItem onSelect={() => handleSelect(() => navigate('/crm'))}>
+          </CommandItem>}
+          {isRolePermitted('crm') && <CommandItem onSelect={() => handleSelect(() => navigate('/crm'))}>
             <Users className="mr-2 h-4 w-4 text-emerald-600" />
             <span>Admissions Kanban Pipeline</span>
-          </CommandItem>
-          <CommandItem onSelect={() => handleSelect(() => navigate('/finance'))}>
+          </CommandItem>}
+          {isRolePermitted('finance') && <CommandItem onSelect={() => handleSelect(() => navigate('/finance'))}>
             <CreditCard className="mr-2 h-4 w-4 text-amber-600" />
             <span>Finance & Payment Verification (LKR)</span>
-          </CommandItem>
-          <CommandItem onSelect={() => handleSelect(() => navigate('/lms'))}>
+          </CommandItem>}
+          {isRolePermitted('lms') && <CommandItem onSelect={() => handleSelect(() => navigate('/lms'))}>
             <BookOpen className="mr-2 h-4 w-4 text-indigo-600" />
             <span>Learning Management Courses</span>
-          </CommandItem>
+          </CommandItem>}
         </CommandGroup>
 
         <CommandSeparator />
@@ -135,7 +139,7 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({ open, onOp
             <CommandItem
               key={prog.id}
               value={`${prog.name} ${prog.code}`}
-              onSelect={() => handleSelect(() => navigate('/academics'))}
+              onSelect={() => handleSelect(() => navigate(isRolePermitted('academics') ? '/academics' : '/'))}
             >
               <GraduationCap className="mr-2 h-4 w-4 text-purple-600" />
               <div className="flex flex-col">

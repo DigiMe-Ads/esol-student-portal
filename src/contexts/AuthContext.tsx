@@ -8,12 +8,16 @@ export interface PortalUser {
   display_name: string;
   role: UserRole;
   created_at: string;
+  student_id?: string | null;   // student & parent accounts
+  lecturer_id?: string | null;  // lecturer accounts
+  student_name?: string | null;
+  lecturer_name?: string | null;
 }
 
 interface AuthContextType {
   user: PortalUser | null;
   loading: boolean;
-  signIn: (username: string, password: string) => Promise<{ error: string | null }>;
+  signIn: (username: string, password: string) => Promise<{ error: string | null; user?: PortalUser }>;
   signOut: () => Promise<void>;
   changePassword: (oldPassword: string, newPassword: string) => Promise<{ error: string | null }>;
 }
@@ -49,7 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (result.error || !result.token || !result.user) return { error: result.error || 'Sign in failed.' };
     setSessionToken(result.token);
     setUser(result.user);
-    return { error: null };
+    return { error: null, user: result.user };
   };
 
   const signOut = async () => {

@@ -337,7 +337,7 @@ export interface QuizQuestion {
   id: number;
   question: string;
   options: string[];
-  correctAnswer: number;
+  correctAnswer?: number; // only in the staff-only answer key (lms_quiz_keys), never sent to students
 }
 
 export interface LMSQuiz {
@@ -443,5 +443,60 @@ export interface SystemNotification {
   message: string;
   channel: 'In-app' | 'SMS' | 'WhatsApp' | 'Email';
   is_read: boolean;
+  target_batch_id?: string;
+  sent_by?: string;
   created_at: string;
+  batch?: Batch;
+  student?: Student;
+}
+
+export interface Room {
+  id: string;
+  campus_id?: string;
+  name: string;
+  kind: string;
+  capacity: number;
+  created_at: string;
+  campus?: Campus;
+}
+
+export interface RoomBooking {
+  id: string;
+  room_id: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  purpose: string;
+  booked_by?: string;
+  created_at: string;
+  room?: Room;
+}
+
+export interface AlumniProfile {
+  student_id: string;
+  graduation_year?: number;
+  current_position?: string;
+  organization?: string;
+  notes?: string;
+  updated_at: string;
+}
+
+export interface AuditLog {
+  id: string;
+  user_role: string;
+  action: string;
+  entity_type: string;
+  entity_id?: string;
+  details?: string;
+  created_at: string;
+}
+
+export interface QuizAttempt {
+  id: string;
+  quiz_id: string;
+  student_id: string;
+  score: number;
+  total_questions: number;
+  passed: boolean;
+  submitted_at: string;
 }
