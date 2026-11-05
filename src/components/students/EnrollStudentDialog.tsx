@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Loader2, UserPlus } from 'lucide-react';
+import { Camera, Loader2, UserPlus } from 'lucide-react';
+import { uploadStudentPhoto } from '@/services/fileStorage';
 import { toast } from 'sonner';
 import { campusApi } from '@/services/campusApi';
 import { usePermission } from '@/lib/permissions';
@@ -44,6 +45,8 @@ export const EnrollStudentDialog: React.FC<EnrollStudentDialogProps> = ({
   const [parentUser, setParentUser] = useState('');
   const [parentPw, setParentPw] = useState('');
   const [saving, setSaving] = useState(false);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const photoPreview = useMemo(() => (photo ? URL.createObjectURL(photo) : null), [photo]);
   const canLogins = can('createStudentLogins');
 
   useEffect(() => {
@@ -71,6 +74,7 @@ export const EnrollStudentDialog: React.FC<EnrollStudentDialogProps> = ({
     setParentLogin(false);
     setParentUser('');
     setParentPw('');
+    setPhoto(null);
   }, [open, inquiry, programmes, campuses, canLogins]);
 
   // only batches of the chosen programme (batch -> intake -> programme)
@@ -114,6 +118,11 @@ export const EnrollStudentDialog: React.FC<EnrollStudentDialogProps> = ({
         inquiry_id: inquiry?.id ?? null,
       });
       const loginErrors: string[] = [];
+      if (photo) {
+        await uploadStudentPhoto(student.id, photo)
+          .then((url) => campusApi.updateStudent(student.id, { photo_url: url }))
+          .catch((err) => loginErrors.push(`photo: ${err.message}`));
+      }
       if (studentLogin) {
         await campusApi
           .createPortalUser({ username: studentUser, displayName: student.full_name, role: 'student', password: studentPw, studentId: student.id })
@@ -127,7 +136,7 @@ export const EnrollStudentDialog: React.FC<EnrollStudentDialogProps> = ({
           .catch((err) => loginErrors.push(`parent login: ${err.message}`));
       }
       toast.success(`${student.full_name} registered as ${student.student_number}.`);
-      if (loginErrors.length) toast.error(`Student saved, but ${loginErrors.join('; ')}. Add it from the student's 360° view.`);
+      if (loginErrors.length) toast.error(`Student saved, but ${loginErrors.join('; ')}. You can fix it from the student's 360° view.`);
       onEnrolled(student);
       onOpenChange(false);
     } catch (err: any) {
@@ -179,6 +188,17 @@ export const EnrollStudentDialog: React.FC<EnrollStudentDialogProps> = ({
               </div>
               <div className="sm:col-span-2">{field('Address', 'address')}</div>
               {field('Emergency contact', 'emergency_contact')}
+              <div className="sm:col-span-3 flex items-center gap-3">
+                {photoPreview ? (
+                  <img src={photoPreview} alt="" className="w-12 h-14 rounded object-cover border border-border" />
+                ) : (
+                  <div className="w-12 h-14 rounded border border-dashed border-border flex items-center justify-center text-muted-foreground"><Camera className="w-4 h-4" /></div>
+                )}
+                <div className="space-y-1 flex-1">
+                  <Label className="text-xs">Student photo (optional, for the ID card)</Label>
+                  <Input type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} className="h-8 text-xs" />
+                </div>
+              </div>
             </div>
           </section>
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { printElement } from '@/lib/print';
+import { useFileUrl } from '@/services/fileStorage';
 import QRCode from 'qrcode';
 import { BarcodeRenderer } from './BarcodeRenderer';
 import type { Student } from '@/types/campus';
@@ -24,6 +25,7 @@ export const StudentIDCard: React.FC<StudentIDCardProps> = ({ student, onPrint }
     setPrinting(false);
   }, [printing]);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
+  const photoSrc = useFileUrl(student.photo_url);
 
   useEffect(() => {
     if (student.student_number) {
@@ -98,7 +100,7 @@ export const StudentIDCard: React.FC<StudentIDCardProps> = ({ student, onPrint }
               <div className="relative shrink-0">
                 <div className="w-20 h-24 rounded-lg overflow-hidden border-2 border-amber-400/80 shadow-md bg-slate-800">
                   <img
-                    src={student.photo_url || `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 100'><rect width='80' height='100' fill='#1e293b'/><text x='40' y='60' font-family='sans-serif' font-size='30' font-weight='700' fill='#fbbf24' text-anchor='middle'>${student.full_name.split(/s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase()}</text></svg>`)}`}
+                    src={photoSrc || `data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 100'><rect width='80' height='100' fill='#1e293b'/><text x='40' y='60' font-family='sans-serif' font-size='30' font-weight='700' fill='#fbbf24' text-anchor='middle'>${student.full_name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase()}</text></svg>`)}`}
                     alt={student.full_name}
                     className="w-full h-full object-cover"
                   />

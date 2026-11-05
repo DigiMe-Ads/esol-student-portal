@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Edit3, KeyRound, Loader2, Save } from 'lucide-react';
+import { Edit3, KeyRound, Loader2, Save, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { campusApi } from '@/services/campusApi';
 import { usePermission } from '@/lib/permissions';
 import { formatLKR } from '@/lib/print';
 import type { AttendanceRecord, ExamRegistration, Invoice, Payment, Student } from '@/types/campus';
 import { StudentIDCard } from '@/components/id-card/StudentIDCard';
-import { StudentAvatar } from '@/components/students/StudentAvatar';
+import { StudentAvatar, StudentPhotoButton } from '@/components/students/StudentAvatar';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
@@ -22,12 +22,13 @@ interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onChanged: () => void;
+  onDelete?: (student: Student) => void; // shown only when the caller may delete
 }
 
 const statusTone = (s: string) =>
   s === 'Active' ? 'bg-emerald-600' : s === 'Graduated' || s === 'Alumni' || s === 'Completed' ? 'bg-blue-600' : s === 'Withdrawn' ? 'bg-destructive' : 'bg-amber-600';
 
-export const StudentProfileDialog: React.FC<Props> = ({ student, open, onOpenChange, onChanged }) => {
+export const StudentProfileDialog: React.FC<Props> = ({ student, open, onOpenChange, onChanged, onDelete }) => {
   const can = usePermission();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -38,6 +39,7 @@ export const StudentProfileDialog: React.FC<Props> = ({ student, open, onOpenCha
   const [form, setForm] = useState<Partial<Student>>({});
   const [saving, setSaving] = useState(false);
   const [newLogin, setNewLogin] = useState({ role: 'student', username: '', password: '' });
+  const [photoUrl, setPhotoUrl] = useState<string | undefined>(undefined);
 
   const canEdit = can('manageStudents');
   const canFinance = can('readFinance');
@@ -62,6 +64,7 @@ export const StudentProfileDialog: React.FC<Props> = ({ student, open, onOpenCha
     if (open && student) {
       setEditing(false);
       setForm(student);
+      setPhotoUrl(student.photo_url);
       setNewLogin({ role: 'student', username: student.student_number.toLowerCase(), password: '' });
       load(student).catch((err) => toast.error(err.message));
     }
@@ -188,18 +191,33 @@ export const StudentProfileDialog: React.FC<Props> = ({ student, open, onOpenCha
             ) : (
               <>
                 <div className="flex flex-col sm:flex-row gap-4 items-start p-4 bg-muted/40 rounded-xl border border-border">
-                  <StudentAvatar student={student} className="w-20 h-24 rounded-lg text-xl" />
+                  <div className="flex flex-col items-center gap-2 shrink-0">
+                    <StudentAvatar student={{ ...student, photo_url: photoUrl }} className="w-20 h-24 rounded-lg text-xl" />
+                    {canEdit && (
+                      <StudentPhotoButton
+                        student={{ ...student, photo_url: photoUrl }}
+                        onChanged={(url) => { setPhotoUrl(url); onChanged(); }}
+                      />
+                    )}
+                  </div>
                   <div className="space-y-1.5 flex-1">
                     <div className="flex items-start justify-between">
                       <div>
                         <h3 className="text-base font-bold text-foreground">{student.full_name}</h3>
                         <div className="text-xs font-mono text-primary font-semibold">{student.student_number}</div>
                       </div>
-                      {canEdit && (
-                        <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setEditing(true)}>
-                          <Edit3 className="w-3.5 h-3.5" /> Edit
-                        </Button>
-                      )}
+                      <div className="flex gap-1.5">
+                        {canEdit && (
+                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1" onClick={() => setEditing(true)}>
+                            <Edit3 className="w-3.5 h-3.5" /> Edit
+                          </Button>
+                        )}
+                        {onDelete && (
+                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1 text-destructive border-destructive/30" onClick={() => onDelete(student)}>
+                            <Trash2 className="w-3.5 h-3.5" /> Delete
+                          </Button>
+                        )}
+                      </div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted-foreground pt-1">
                       <div>📞 Phone: <span className="text-foreground">{student.phone}</span></div>
@@ -332,7 +350,7 @@ export const StudentProfileDialog: React.FC<Props> = ({ student, open, onOpenCha
           )}
 
           <TabsContent value="idcard" className="flex justify-center py-3">
-            <StudentIDCard student={student} />
+            <StudentIDCard student={{ ...student, photo_url: photoUrl }} />
           </TabsContent>
         </Tabs>
       </DialogContent>

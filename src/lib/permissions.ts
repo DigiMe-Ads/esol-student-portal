@@ -20,6 +20,7 @@ const RULES = {
   issueCertificates: ['exam_officer'],
   manageAlumni: ['admissions', 'management'],
   readAudit: ['management'],
+  deleteRecords: [], // permanent student/lecturer deletion: Super Admin only
 } satisfies Record<string, UserRole[]>;
 
 export type Permission = keyof typeof RULES;

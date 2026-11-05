@@ -12,9 +12,11 @@ Runs on the **ESOL HR Suite** Supabase project (`qwsdnflnaehnycqqhmkf`) but only
 - `supabase/00002_seed_demo_data.sql` – the demo data the Medo app shipped with
 - `supabase/00003_expose_schema.sql` – adds `student_portal` to the Data API's exposed schemas
 - `supabase/00004_file_storage.sql` – private `student-portal-files` bucket for uploads (50 MB per file)
+- `supabase/00006_student_photos.sql` – private student photos (staff who manage students upload; staff and the student/parent view)
 - `supabase/00005_roles_and_access.sql` – per-role access rules, account links, server-side actions, audit trail, rooms, alumni
+- `supabase/00007_delete_records.sql` / `00008_restrict_deletes.sql` – Super-Admin-only permanent delete of students and lecturers (with linked logins), readable audit lines
 
-All five are already applied. Sign-in does **not** use Supabase Auth (the HR Suite gives every auth user an
+All eight are already applied. Sign-in does **not** use Supabase Auth (the HR Suite gives every auth user an
 HR profile). Accounts live in `student_portal.users`; the app sends its session token as the
 `x-portal-session` header and every table's RLS policy requires a live session.
 

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { supabase } from '@/db/supabase';
 import type { LMSMaterial } from '@/types/campus';
 
@@ -65,4 +66,55 @@ export async function openPortalFile(url: string) {
 export async function deletePortalFile(url: string) {
   if (!isStoredFile(url)) return;
   await supabase.storage.from(PORTAL_BUCKET).remove([url.slice(STORAGE_PREFIX.length)]);
+}
+
+// ---------------------------------------------------------------- student photos
+
+const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+
+// Shrinks to at most 600px on the long side and re-encodes as JPEG, so photos stay small.
+async function downscale(file: File, max = 600): Promise<Blob> {
+  const img = await createImageBitmap(file);
+  const scale = Math.min(1, max / Math.max(img.width, img.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(img.width * scale);
+  canvas.height = Math.round(img.height * scale);
+  canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not read that image.'))), 'image/jpeg', 0.85),
+  );
+}
+
+export async function uploadStudentPhoto(studentId: string, file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('Choose an image file (JPG or PNG).');
+  if (file.size > MAX_PHOTO_BYTES) throw new Error('Photo is larger than 8 MB.');
+  const blob = await downscale(file);
+  const path = `photos/${studentId}/${crypto.randomUUID()}.jpg`;
+  const { error } = await supabase.storage.from(PORTAL_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+  if (error) throw new Error(`Photo upload failed: ${error.message}`);
+  return `${STORAGE_PREFIX}${path}`;
+}
+
+// Signed URLs for stored files, cached for most of their 10-minute life.
+const urlCache = new Map<string, { url: string; until: number }>();
+
+export function useFileUrl(url?: string | null): string | null {
+  const [resolved, setResolved] = useState<string | null>(() => (url && !isStoredFile(url) ? url : urlCache.get(url ?? '')?.url ?? null));
+  useEffect(() => {
+    if (!url) return setResolved(null);
+    if (!isStoredFile(url)) return setResolved(url);
+    const hit = urlCache.get(url);
+    if (hit && hit.until > Date.now()) return setResolved(hit.url);
+    let cancelled = false;
+    resolveFileUrl(url)
+      .then((signed) => {
+        urlCache.set(url, { url: signed, until: Date.now() + 8 * 60 * 1000 });
+        if (!cancelled) setResolved(signed);
+      })
+      .catch(() => !cancelled && setResolved(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [url]);
+  return resolved;
 }

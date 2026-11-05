@@ -5,6 +5,7 @@ import type { Student, Programme, Campus, Batch } from '@/types/campus';
 import { StudentIDCard } from '@/components/id-card/StudentIDCard';
 import { StudentProfileDialog, STUDENT_STATUSES } from '@/components/students/StudentProfileDialog';
 import { EnrollStudentDialog } from '@/components/students/EnrollStudentDialog';
+import { ConfirmDeleteDialog } from '@/components/common/ConfirmDeleteDialog';
 import { StudentAvatar } from '@/components/students/StudentAvatar';
 import { useAuthRole } from '@/contexts/AuthRoleContext';
 import { usePermission } from '@/lib/permissions';
@@ -44,6 +45,7 @@ import {
   Edit3,
   Award,
   UserPlus,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -55,6 +57,7 @@ export const StudentsPage: React.FC = () => {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Student | null>(null);
   const { selectedCampusId } = useAuthRole();
   const can = usePermission();
 
@@ -281,6 +284,18 @@ export const StudentsPage: React.FC = () => {
                           >
                             360° View
                           </Button>
+                          {can('deleteRecords') && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => setDeleteTarget(student)}
+                              className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
+                              title="Delete student"
+                              aria-label={`Delete ${student.full_name}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -315,6 +330,27 @@ export const StudentsPage: React.FC = () => {
         open={detailModalOpen}
         onOpenChange={setDetailModalOpen}
         onChanged={loadData}
+        onDelete={can('deleteRecords') ? (st) => setDeleteTarget(st) : undefined}
+      />
+
+      {/* MODAL 4: PERMANENT DELETE */}
+      <ConfirmDeleteDialog
+        open={deleteTarget !== null}
+        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        title="Delete student"
+        name={deleteTarget?.full_name ?? ''}
+        confirmCode={deleteTarget?.student_number ?? ''}
+        codeLabel="student number"
+        loadSummary={() => campusApi.getStudentDeleteSummary(deleteTarget!.id)}
+        summaryLabels={{
+          enrolments: 'programme enrolment(s)', invoices: 'invoice(s)', payments: 'payment record(s)',
+          attendance: 'attendance record(s)', submissions: 'coursework submission(s)', quiz_attempts: 'quiz attempt(s)',
+          exam_results: 'exam registration(s) / result(s)', certificates: 'certificate(s) (verification links stop working)',
+          logins: 'portal login(s) (student / parent)',
+        }}
+        note="Support tickets are kept without the student link. To keep the history instead, set the status to Withdrawn."
+        onConfirm={(typed) => campusApi.deleteStudent(deleteTarget!.id, typed)}
+        onDeleted={() => { setDetailModalOpen(false); setSelectedStudent(null); loadData(); }}
       />
 
       {/* MODAL 3: REGISTER NEW STUDENT */}

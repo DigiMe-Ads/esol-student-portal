@@ -736,6 +736,32 @@ export const campusApi = {
     return data;
   },
 
+  // ---------------------------------------------------------------- permanent deletes (Super Admin)
+  async getStudentDeleteSummary(id: string): Promise<Record<string, number>> {
+    const { data, error } = await supabase.rpc('student_delete_summary', { p_student: id });
+    if (error) throw error;
+    return data;
+  },
+  async deleteStudent(id: string, confirm: string): Promise<void> {
+    const { error } = await supabase.rpc('delete_student', { p_student: id, p_confirm: confirm });
+    if (error) throw error;
+    // best effort: the student's files (photo, coursework, payment slips) go too
+    const bucket = supabase.storage.from('student-portal-files');
+    for (const folder of ['photos', 'submissions', 'payments']) {
+      const { data } = await bucket.list(`${folder}/${id}`, { limit: 1000 });
+      if (data?.length) await bucket.remove(data.map((f) => `${folder}/${id}/${f.name}`));
+    }
+  },
+  async getLecturerDeleteSummary(id: string): Promise<Record<string, number>> {
+    const { data, error } = await supabase.rpc('lecturer_delete_summary', { p_lecturer: id });
+    if (error) throw error;
+    return data;
+  },
+  async deleteLecturer(id: string, confirm: string): Promise<void> {
+    const { error } = await supabase.rpc('delete_lecturer', { p_lecturer: id, p_confirm: confirm });
+    if (error) throw error;
+  },
+
   async updateTicketAssignee(id: string, assignedTo: string): Promise<void> {
     const { error } = await supabase.from('support_tickets').update({ assigned_to: assignedTo || null }).eq('id', id);
     if (error) throw error;

@@ -12,13 +12,16 @@ import {
   BookOpen,
   Award,
   Plus,
+  Pencil,
+  Trash2,
   Search,
   Building,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuthRole } from '@/contexts/AuthRoleContext';
 import { usePermission } from '@/lib/permissions';
-import { FormDialog, clean } from '@/components/common/FormDialog';
+import { FormDialog, clean, type FormField } from '@/components/common/FormDialog';
+import { ConfirmDeleteDialog } from '@/components/common/ConfirmDeleteDialog';
 import { StudentAvatar } from '@/components/students/StudentAvatar';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -34,6 +37,8 @@ export const LecturersPage: React.FC = () => {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [workloadFor, setWorkloadFor] = useState<Lecturer | null>(null);
+  const [editing, setEditing] = useState<Lecturer | null>(null);
+  const [deleting, setDeleting] = useState<Lecturer | null>(null);
   const [alloc, setAlloc] = useState({ module_id: '', batch_id: '' });
   const { selectedCampusId } = useAuthRole();
   const can = usePermission();
@@ -189,6 +194,7 @@ export const LecturersPage: React.FC = () => {
                 <Badge variant="outline" className={lec.status === 'Active' ? 'text-[10px] text-emerald-600 border-emerald-300 bg-emerald-50' : 'text-[10px]'}>
                   {lec.status} • {sessions.filter((x) => x.lecturer_id === lec.id && x.status !== 'Cancelled').length} sessions
                 </Badge>
+                <div className="flex items-center gap-1">
                 <Button
                   variant="outline"
                   size="sm"
@@ -197,6 +203,17 @@ export const LecturersPage: React.FC = () => {
                 >
                   Workload & Batches
                 </Button>
+                {canManage && (
+                  <Button variant="ghost" size="sm" onClick={() => setEditing(lec)} className="h-7 w-7 p-0" title="Edit lecturer" aria-label={`Edit ${lec.full_name}`}>
+                    <Pencil className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+                {can('deleteRecords') && (
+                  <Button variant="ghost" size="sm" onClick={() => setDeleting(lec)} className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10" title="Delete lecturer" aria-label={`Delete ${lec.full_name}`}>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </Button>
+                )}
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -277,6 +294,47 @@ export const LecturersPage: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      <FormDialog
+        open={editing !== null}
+        onOpenChange={(o) => !o && setEditing(null)}
+        title={`Edit ${editing?.full_name ?? 'lecturer'}`}
+        fields={[
+          ...([
+          { name: 'full_name', label: 'Full name', required: true, wide: true },
+          { name: 'lecturer_id', label: 'Staff ID', required: true, placeholder: 'e.g. LEC-0104' },
+          { name: 'email', label: 'Email', type: 'email', required: true },
+          { name: 'phone', label: 'Phone' },
+          { name: 'employment_type', label: 'Employment', type: 'select', options: ['Full-time', 'Part-time', 'Visiting'].map((v) => ({ value: v, label: v })) },
+          { name: 'campus_id', label: 'Campus', type: 'select', options: campuses.map((c) => ({ value: c.id, label: c.name })) },
+          { name: 'qualifications', label: 'Qualifications', wide: true },
+          { name: 'specializations', label: 'Specializations', wide: true },
+        ] as FormField[]),
+          { name: 'status', label: 'Status', type: 'select', options: ['Active', 'On Leave', 'Inactive'].map((v) => ({ value: v, label: v })) },
+        ]}
+        initial={{
+          full_name: editing?.full_name ?? '', lecturer_id: editing?.lecturer_id ?? '', email: editing?.email ?? '', phone: editing?.phone ?? '',
+          employment_type: editing?.employment_type ?? 'Full-time', campus_id: editing?.campus_id ?? '', qualifications: editing?.qualifications ?? '',
+          specializations: editing?.specializations ?? '', status: editing?.status ?? 'Active',
+        }}
+        submitLabel="Save Changes"
+        successMessage="Lecturer details saved."
+        onSubmit={async (v) => { if (editing) { await campusApi.updateLecturer(editing.id, clean(v) as Partial<Lecturer>); loadData(); } }}
+      />
+
+      <ConfirmDeleteDialog
+        open={deleting !== null}
+        onOpenChange={(o) => !o && setDeleting(null)}
+        title="Delete lecturer"
+        name={deleting?.full_name ?? ''}
+        confirmCode={deleting?.lecturer_id ?? ''}
+        codeLabel="staff ID"
+        loadSummary={() => campusApi.getLecturerDeleteSummary(deleting!.id)}
+        summaryLabels={{ allocations: 'module allocation(s)', evaluations: 'student evaluation(s) of this lecturer', logins: 'lecturer portal login(s)' }}
+        note={`Timetabled sessions are kept and show the lecturer as "TBA". To keep everything instead, edit the lecturer and set the status to Inactive.`}
+        onConfirm={(typed) => campusApi.deleteLecturer(deleting!.id, typed)}
+        onDeleted={loadData}
+      />
     </div>
   );
 };
