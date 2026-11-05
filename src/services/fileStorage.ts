@@ -85,15 +85,18 @@ async function downscale(file: File, max = 600): Promise<Blob> {
   );
 }
 
-export async function uploadStudentPhoto(studentId: string, file: File): Promise<string> {
+// Students go under photos/<student id>, lecturers under staff/<lecturer id>.
+export async function uploadPhoto(kind: 'student' | 'lecturer', id: string, file: File): Promise<string> {
   if (!file.type.startsWith('image/')) throw new Error('Choose an image file (JPG or PNG).');
   if (file.size > MAX_PHOTO_BYTES) throw new Error('Photo is larger than 8 MB.');
   const blob = await downscale(file);
-  const path = `photos/${studentId}/${crypto.randomUUID()}.jpg`;
+  const path = `${kind === 'student' ? 'photos' : 'staff'}/${id}/${crypto.randomUUID()}.jpg`;
   const { error } = await supabase.storage.from(PORTAL_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: false });
   if (error) throw new Error(`Photo upload failed: ${error.message}`);
   return `${STORAGE_PREFIX}${path}`;
 }
+
+export const uploadStudentPhoto = (studentId: string, file: File) => uploadPhoto('student', studentId, file);
 
 // Signed URLs for stored files, cached for most of their 10-minute life.
 const urlCache = new Map<string, { url: string; until: number }>();

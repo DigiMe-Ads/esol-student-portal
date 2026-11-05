@@ -760,6 +760,9 @@ export const campusApi = {
   async deleteLecturer(id: string, confirm: string): Promise<void> {
     const { error } = await supabase.rpc('delete_lecturer', { p_lecturer: id, p_confirm: confirm });
     if (error) throw error;
+    const bucket = supabase.storage.from('student-portal-files');
+    const { data } = await bucket.list(`staff/${id}`, { limit: 1000 });
+    if (data?.length) await bucket.remove(data.map((f) => `staff/${id}/${f.name}`));
   },
 
   async updateTicketAssignee(id: string, assignedTo: string): Promise<void> {

@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Camera, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import { uploadStudentPhoto, deletePortalFile, useFileUrl } from '@/services/fileStorage';
+import { uploadPhoto, deletePortalFile, useFileUrl } from '@/services/fileStorage';
 import { campusApi } from '@/services/campusApi';
 import type { Student } from '@/types/campus';
 import { Button } from '@/components/ui/button';
@@ -21,8 +21,13 @@ export const StudentAvatar: React.FC<{ student: Pick<Student, 'full_name' | 'pho
   );
 };
 
-// "Upload / change photo" for an existing student; saves straight to their record.
-export const StudentPhotoButton: React.FC<{ student: Student; onChanged: (photoUrl: string) => void }> = ({ student, onChanged }) => {
+// "Upload / change photo" for an existing student or lecturer; saves straight to their record.
+export const PhotoButton: React.FC<{
+  kind: 'student' | 'lecturer';
+  record: { id: string; photo_url?: string | null };
+  onChanged: (photoUrl: string) => void;
+  compact?: boolean; // icon-only, for cards
+}> = ({ kind, record, onChanged, compact }) => {
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
@@ -30,11 +35,12 @@ export const StudentPhotoButton: React.FC<{ student: Student; onChanged: (photoU
     if (!file) return;
     setBusy(true);
     try {
-      const url = await uploadStudentPhoto(student.id, file);
-      await campusApi.updateStudent(student.id, { photo_url: url });
-      if (student.photo_url) await deletePortalFile(student.photo_url).catch(() => undefined);
+      const url = await uploadPhoto(kind, record.id, file);
+      if (kind === 'student') await campusApi.updateStudent(record.id, { photo_url: url });
+      else await campusApi.updateLecturer(record.id, { photo_url: url });
+      if (record.photo_url) await deletePortalFile(record.photo_url).catch(() => undefined);
       onChanged(url);
-      toast.success('Photo updated. It now appears on the ID card.');
+      toast.success(kind === 'student' ? 'Photo updated. It now appears on the ID card.' : 'Staff photo updated.');
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -46,9 +52,18 @@ export const StudentPhotoButton: React.FC<{ student: Student; onChanged: (photoU
   return (
     <>
       <input ref={input} type="file" accept="image/*" className="hidden" onChange={(e) => handleFile(e.target.files?.[0])} />
-      <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => input.current?.click()} className="h-7 text-xs gap-1">
+      <Button
+        type="button"
+        size="sm"
+        variant={compact ? 'ghost' : 'outline'}
+        disabled={busy}
+        onClick={() => input.current?.click()}
+        className={compact ? 'h-7 w-7 p-0' : 'h-7 text-xs gap-1'}
+        title={record.photo_url ? 'Change photo' : 'Upload photo'}
+        aria-label={record.photo_url ? 'Change photo' : 'Upload photo'}
+      >
         {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />}
-        {student.photo_url ? 'Change photo' : 'Upload photo'}
+        {!compact && (record.photo_url ? 'Change photo' : 'Upload photo')}
       </Button>
     </>
   );

@@ -6,7 +6,7 @@ import { usePermission } from '@/lib/permissions';
 import { formatLKR } from '@/lib/print';
 import type { AttendanceRecord, ExamRegistration, Invoice, Payment, Student } from '@/types/campus';
 import { StudentIDCard } from '@/components/id-card/StudentIDCard';
-import { StudentAvatar, StudentPhotoButton } from '@/components/students/StudentAvatar';
+import { StudentAvatar, PhotoButton } from '@/components/students/StudentAvatar';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
@@ -194,8 +194,9 @@ export const StudentProfileDialog: React.FC<Props> = ({ student, open, onOpenCha
                   <div className="flex flex-col items-center gap-2 shrink-0">
                     <StudentAvatar student={{ ...student, photo_url: photoUrl }} className="w-20 h-24 rounded-lg text-xl" />
                     {canEdit && (
-                      <StudentPhotoButton
-                        student={{ ...student, photo_url: photoUrl }}
+                      <PhotoButton
+                        kind="student"
+                        record={{ id: student.id, photo_url: photoUrl }}
                         onChanged={(url) => { setPhotoUrl(url); onChanged(); }}
                       />
                     )}

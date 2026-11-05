@@ -22,7 +22,7 @@ import { useAuthRole } from '@/contexts/AuthRoleContext';
 import { usePermission } from '@/lib/permissions';
 import { FormDialog, clean, type FormField } from '@/components/common/FormDialog';
 import { ConfirmDeleteDialog } from '@/components/common/ConfirmDeleteDialog';
-import { StudentAvatar } from '@/components/students/StudentAvatar';
+import { StudentAvatar, PhotoButton } from '@/components/students/StudentAvatar';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
@@ -203,6 +203,14 @@ export const LecturersPage: React.FC = () => {
                 >
                   Workload & Batches
                 </Button>
+                {canManage && (
+                  <PhotoButton
+                    kind="lecturer"
+                    record={lec}
+                    compact
+                    onChanged={(url) => setLecturers((all) => all.map((l) => (l.id === lec.id ? { ...l, photo_url: url } : l)))}
+                  />
+                )}
                 {canManage && (
                   <Button variant="ghost" size="sm" onClick={() => setEditing(lec)} className="h-7 w-7 p-0" title="Edit lecturer" aria-label={`Edit ${lec.full_name}`}>
                     <Pencil className="w-3.5 h-3.5" />
